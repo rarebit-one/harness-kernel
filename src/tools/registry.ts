@@ -4,11 +4,50 @@ import { readFileSafe, listFiles } from "../primitives/fs.js"
 import { connectMcp, type McpConnection } from "../connectors/mcpClient.js"
 import type { ConnectorConfig, IssueEntry, KnowledgeEntry } from "../types.js"
 import type { ToolSpec } from "../providers/types.js"
+import type { ToolMetadata } from "./metadata.js"
+
+/**
+ * What a tool produced: the string the model sees, plus the typed payload that
+ * string was projected from.
+ *
+ * The model can only consume text, so `content` is what goes back into the
+ * conversation. But a caller that JSON-stringifies a struct on the way out and
+ * re-parses it on the way in has lost the type for no reason — so `structured`
+ * carries the original alongside, untouched.
+ */
+export interface ToolOutput {
+  /** The string projection fed back to the model. */
+  content: string
+  /** The typed payload, preserved for callers and clients. */
+  structured?: unknown
+}
 
 /** A tool the agent can call: its public spec plus a server-side executor. */
 export interface Tool {
   spec: ToolSpec
+  /** Optional descriptive metadata — scoping, confirmation, undo, retention. */
+  meta?: ToolMetadata
+  /**
+   * Execute and return the model-facing string. This is the required contract
+   * every tool implements, and the only one the loop needs.
+   */
   execute(input: Record<string, unknown>): Promise<string>
+  /**
+   * Optional richer executor. When present the loop calls this instead and
+   * keeps the typed payload alongside the string; when absent nothing changes.
+   *
+   * Two methods rather than one widened return type is a deliberate
+   * concession to compatibility: every existing tool and every existing caller
+   * types `execute` as returning a plain `string`, and widening it to a union
+   * would break them at the type level for a payload most tools never produce.
+   */
+  executeStructured?(input: Record<string, unknown>): Promise<ToolOutput>
+}
+
+/** Run a tool through its richest available executor. */
+export async function executeTool(tool: Tool, input: Record<string, unknown>): Promise<ToolOutput> {
+  if (tool.executeStructured) return tool.executeStructured(input)
+  return { content: await tool.execute(input) }
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "")

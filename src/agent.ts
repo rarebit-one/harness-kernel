@@ -1,8 +1,17 @@
+import { asChatModel, type ChatModel } from "./models/chat.js"
+import type { InvokeContext } from "./models/types.js"
 import type { AgentMessage, Provider, ToolResult } from "./providers/types.js"
-import type { Tool } from "./tools/registry.js"
+import { executeTool, type Tool } from "./tools/registry.js"
+import { toToolSpecs } from "./tools/metadata.js"
 
 export interface RunAgentOptions {
-  provider: Provider
+  /**
+   * The chat model driving the loop. A bare {@link Provider} is accepted and
+   * adapted onto the model seam internally, so existing callers are unaffected;
+   * pass a {@link ChatModel} to drive the loop through a registry-resolved,
+   * middleware-wrapped invocation instead.
+   */
+  provider: Provider | ChatModel
   system: string
   userPrompt: string
   tools: Tool[]
@@ -55,8 +64,14 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
   const maxDurationMs = options.maxDurationMs ?? defaultMaxDurationMs()
   const log = options.log ?? (() => {})
 
+  // A `Provider` is adapted onto the model seam; a `ChatModel` passes straight
+  // through. Either way the loop below talks to one interface, so a
+  // middleware-wrapped or registry-resolved model drives it identically.
+  const model = asChatModel(provider)
+  const ctx: InvokeContext = { log, budget: { maxDurationMs } }
+
   const byName = new Map(tools.map((t) => [t.spec.name, t]))
-  const specs = tools.map((t) => t.spec)
+  const specs = toToolSpecs(tools)
   const messages: AgentMessage[] = [{ role: "user", text: userPrompt }]
 
   const deadline = Date.now() + maxDurationMs
@@ -77,7 +92,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
       log(`reached run time budget (${maxDurationMs}ms) after ${step} step(s)`)
       break
     }
-    const turn = await provider.converse({ system, messages, tools: specs })
+    const { value: turn } = await model.invoke({ system, messages, tools: specs }, ctx)
     messages.push({ role: "assistant", text: turn.text, toolCalls: turn.toolCalls })
     if (turn.text) lastAssistantText = turn.text
 
@@ -95,9 +110,16 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
         continue
       }
       try {
-        const output = await tool.execute(call.input)
-        results.push({ toolCallId: call.id, content: truncate(output) })
-        log(`tool ${call.name} ok (${output.length} bytes)`)
+        // Uses the tool's structured executor when it has one, so a typed
+        // payload survives alongside the string the model sees. Tools without
+        // one take the original string path unchanged.
+        const output = await executeTool(tool, call.input)
+        results.push({
+          toolCallId: call.id,
+          content: truncate(output.content),
+          ...(output.structured !== undefined ? { structured: output.structured } : {}),
+        })
+        log(`tool ${call.name} ok (${output.content.length} bytes)`)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         results.push({ toolCallId: call.id, content: message, isError: true })
@@ -121,7 +143,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
   if (!finalText && exhausted) {
     log(`reached max steps (${maxSteps}); requesting a final summary`)
     try {
-      const summary = await provider.converse({ system, messages, tools: [] })
+      const summary = (await model.invoke({ system, messages, tools: [] }, ctx)).value
       finalText = summary.text || lastAssistantText
     } catch (err) {
       log(`final summary failed: ${err instanceof Error ? err.message : String(err)}`)

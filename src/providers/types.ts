@@ -17,10 +17,17 @@ export interface ToolCall {
   input: Record<string, unknown>
 }
 
-/** The runner's reply to a ToolCall. */
+/** The reply to a ToolCall. */
 export interface ToolResult {
   toolCallId: string
+  /** The string projection sent to the model — the only part a provider serializes. */
   content: string
+  /**
+   * The typed payload `content` was projected from, when the tool produced one.
+   * Providers ignore it; callers and clients read it to avoid re-parsing a
+   * struct back out of the string.
+   */
+  structured?: unknown
   isError?: boolean
 }
 
