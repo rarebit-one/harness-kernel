@@ -31,9 +31,9 @@ around — the kernel never bends to a consumer.
 | `src/context/` | `ContextProvider` chain — `assembleContext` / `renderContext` |
 | `src/providers/` | `Provider` interface + anthropic / openai / openrouter / mock adapters, `selectProvider` |
 | `src/agent.ts` | `runAgent` — the tool-use loop, driven through the model seam |
-| `src/tools/` | `Tool` + `primitiveTools` (generic) / `emissionTools` (domain, injectable) / `connectorTools`; `metadata.ts` (scoping + projections); `modelTool.ts` (a model surfaced as a tool) |
+| `src/tools/` | `Tool` + `primitiveTools` (generic) / `connectorTools`; `metadata.ts` (scoping + projections); `modelTool.ts` (a model surfaced as a tool). Domain tools are the application's, injected via `DomainToolFactory`. |
 | `src/primitives/` | Sandbox primitives: `codeExec`, `fs`, `http`, `download` |
-| `src/engines/` | The `AgentEngine` seam + native / claude-code / codex harnesses + the shared capability surface |
+| `src/engines/` | The `AgentEngine` seam + native / claude-code / codex harnesses; the capability *mechanism* (guards, `write_file`, MCP + stdio transports) — never an application's capability set |
 | `src/secrets.ts` | `secretsToEnv` |
 
 ## The six extension points
@@ -49,7 +49,7 @@ or a tool.
 | 3 | **Middleware** | `Middleware` | correlation, logging, health tracking, error redaction |
 | 4 | **Engines** | `AgentEngine` | native / claude-code / codex |
 | 5 | **Context providers** | `ContextProvider` | parallel assembly + rendering; wired into `NativeEngine` |
-| 6 | **Tools** | `Tool` + `ToolMetadata` | primitives, emissions, MCP connectors, projections, `modelAsTool` |
+| 6 | **Tools** | `Tool` + `ToolMetadata` | primitives, MCP connectors, projections, `modelAsTool`; domain tools + capabilities are injected |
 
 **Points 1 and 2 are different layers and must not be conflated.** A resolver
 answers "which model, prompt and tools should capability X use?" and hands back
@@ -106,9 +106,16 @@ Don't add tests that require a live provider key.
   strings, not in comments. Anything an application wants attributed to itself
   (OpenRouter attribution, an MCP client identity, a system prompt) is passed
   **in** by that application. Grep for a product name before you commit.
-- **Generic vs. domain tools.** `primitiveTools()` stays strictly generic.
-  Domain-emission tools (`promote_knowledge`, `record_issue`) live in
-  `emissionTools()` and are composed in by the caller.
+- **Generic vs. domain tools.** `primitiveTools()` stays strictly generic. The
+  kernel defines **no** domain tools and **no** application capabilities at all —
+  what a run may emit is the application's vocabulary. Those arrive through the
+  seams: `DomainToolFactory` for the in-process loop, `CapabilityToolFactory` for
+  Claude Code, and an application-owned entrypoint script for codex (a child
+  process cannot be handed a closure). The only capability the kernel ships is
+  `writeFileCapability`, because a sandbox write carries no product semantics.
+  The workspace-scope and path guards (`denyCrossWorkspace`, `resolveWithin`) are
+  exported so application capabilities inherit identical security properties
+  rather than reimplementing them slightly differently.
 - **Fail loud, never silently degrade.** `AgentEngine.supports()` returns a
   reason and the caller fails the run; capabilities reject cross-workspace calls
   outright. The one deliberate exception is the offline `mock` provider fallback.

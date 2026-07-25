@@ -36,8 +36,12 @@ describe("selectEngine", () => {
     expect(selectEngine("claude-code").name).toBe("claude-code")
   })
 
-  it("resolves the codex engine by name", () => {
-    expect(selectEngine("codex").name).toBe("codex")
+  it("resolves the codex engine by name when given a capability script", () => {
+    expect(selectEngine("codex", { capabilityServerScript: "/opt/app/caps.js" }).name).toBe("codex")
+  })
+
+  it("refuses codex without a capability script rather than serving an empty surface", () => {
+    expect(() => selectEngine("codex")).toThrow(/capabilityServerScript/)
   })
 })
 

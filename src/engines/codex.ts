@@ -1,7 +1,6 @@
 import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import type { KnowledgeEntry } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { CAPABILITY_SERVER_NAME } from "./capabilityMcp.js"
@@ -51,7 +50,6 @@ const DEFAULT_MODEL = "gpt-5-codex"
 const LOG_TRUNCATE = 2000
 
 /** The runner-hosted capability MCP server the codex `config.toml` points at. */
-const CAPABILITY_SERVER_SCRIPT = fileURLToPath(new URL("./capabilityStdio.js", import.meta.url))
 
 /**
  * Drives a run with the OpenAI Codex CLI against the sandbox working tree,
@@ -73,10 +71,13 @@ export class CodexEngine implements AgentEngine {
   private readonly drive: CodexDriver
   private readonly capabilityServerScript: string
 
-  constructor(
-    drive: CodexDriver = defaultCodexDriver,
-    capabilityServerScript: string = CAPABILITY_SERVER_SCRIPT,
-  ) {
+  /**
+   * `capabilityServerScript` is REQUIRED: the capability surface is injected,
+   * and a child process cannot be handed a closure, so the application must
+   * supply the entrypoint that builds and serves its own tools. There is no
+   * sensible kernel default — one would silently serve an empty surface.
+   */
+  constructor(drive: CodexDriver = defaultCodexDriver, capabilityServerScript: string) {
     this.drive = drive
     this.capabilityServerScript = capabilityServerScript
   }

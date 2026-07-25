@@ -2,7 +2,7 @@ import { runCode } from "../primitives/codeExec.js"
 import { httpFetch } from "../primitives/http.js"
 import { readFileSafe, listFiles } from "../primitives/fs.js"
 import { connectMcp, type McpConnection } from "../connectors/mcpClient.js"
-import type { ConnectorConfig, IssueEntry, KnowledgeEntry } from "../types.js"
+import type { ConnectorConfig } from "../types.js"
 import type { ToolSpec } from "../providers/types.js"
 import type { ToolMetadata } from "./metadata.js"
 
@@ -69,8 +69,8 @@ function stringHeaders(v: unknown): Record<string, string> | undefined {
  * user's own repo code, invoked through `run_code` — never baked in here.
  *
  * This set is strictly generic: sandboxed shell, file reads, and HTTP. Tools
- * that collect an application's *domain output* are not here — see
- * {@link emissionTools}, which a caller composes in.
+ * that collect an application's *domain output* are not here at all — they are
+ * the application's vocabulary, injected through the engines' domain-tool seam.
  *
  * When `allowed` is provided it acts as an allowlist of primitive tool names
  * (from the workflow's `permissions.tools`).
@@ -167,105 +167,6 @@ export function primitiveTools(
           allowHosts, // egress allowlist from the workflow's permissions (undefined = any public host)
         })
         return JSON.stringify({ status: res.status, body: res.body })
-      },
-    },
-  ]
-
-  return allowed ? all.filter((t) => allowed.includes(t.spec.name)) : all
-}
-
-/** The sinks an emission tool appends to; the caller reads them after the run. */
-export interface EmissionSinks {
-  knowledge?: KnowledgeEntry[]
-  issues?: IssueEntry[]
-}
-
-/**
- * The *domain-emission* tools: how a run hands durable knowledge and
- * human-actionable issues back to its caller. They are deliberately NOT part of
- * {@link primitiveTools} — a kernel primitive is generic (shell, files, HTTP),
- * whereas what an emission *means* (where knowledge is promoted to, what
- * "issue" denotes, what approval gate applies) is the application's concern.
- * So they are injected, not inherited: compose them alongside the primitives
- * when your application wants them.
- *
- * `allowed` applies the same permissions allowlist the primitives honour, so a
- * caller composing both sets gets uniform gating across the whole tool surface.
- */
-export function emissionTools(sinks: EmissionSinks = {}, allowed?: string[]): Tool[] {
-  const all: Tool[] = [
-    {
-      spec: {
-        name: "promote_knowledge",
-        description:
-          "Record a durable piece of workspace knowledge/memory learned during this run " +
-          "(a preference, decision, fact, or reusable summary). It is promoted into the " +
-          "workspace after the run completes — held for human approval if the workflow " +
-          "requires it. Use sparingly, for genuinely reusable knowledge, not transient output.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            content: { type: "string", description: "The knowledge to record (markdown)." },
-            title: { type: "string", description: "Optional short title." },
-            kind: {
-              type: "string",
-              description: "Optional kind, e.g. 'memory' (default) or 'decision'.",
-            },
-          },
-          required: ["content"],
-        },
-      },
-      // eslint-disable-next-line @typescript-eslint/require-await -- execute() is async by tool contract; this tool resolves synchronously
-      execute: async (input) => {
-        const content = str(input.content)
-        if (!content) return JSON.stringify({ ok: false, error: "content is required" })
-
-        const entry: KnowledgeEntry = { content }
-        if (str(input.title)) entry.title = str(input.title)
-        if (str(input.kind)) entry.kind = str(input.kind)
-        sinks.knowledge?.push(entry)
-        return JSON.stringify({ ok: true })
-      },
-    },
-    {
-      spec: {
-        name: "record_issue",
-        description:
-          "Open a workspace issue — the 'a human should look at this' surface (a decision " +
-          "sheet, a finding, a chase item). It is filed after the run completes. Pass a stable " +
-          "`dedupe_key` so a re-run UPDATES the same issue instead of opening a duplicate. Use " +
-          "for durable, human-actionable items — not transient run output.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            title: { type: "string", description: "Short issue title." },
-            body: { type: "string", description: "Issue body (markdown)." },
-            dedupe_key: {
-              type: "string",
-              description:
-                "Stable key so re-runs upsert one rolling issue rather than duplicating.",
-            },
-            labels: {
-              type: "array",
-              items: { type: "string" },
-              description: "Optional labels.",
-            },
-          },
-          required: ["title"],
-        },
-      },
-      // eslint-disable-next-line @typescript-eslint/require-await -- execute() is async by tool contract; this tool resolves synchronously
-      execute: async (input) => {
-        const title = str(input.title)
-        if (!title) return JSON.stringify({ ok: false, error: "title is required" })
-
-        const entry: IssueEntry = { title }
-        if (str(input.body)) entry.body = str(input.body)
-        if (str(input.dedupe_key)) entry.dedupe_key = str(input.dedupe_key)
-        const labels = strArray(input.labels)
-        if (labels.length > 0) entry.labels = labels
-        sinks.issues?.push(entry)
-        return JSON.stringify({ ok: true })
       },
     },
   ]

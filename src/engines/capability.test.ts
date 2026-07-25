@@ -3,20 +3,20 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
-  CAPABILITY_TOOL_NAMES,
-  capabilityTools,
+  denyCrossWorkspace,
+  resolveWithin,
+  writeFileCapability,
   type CapabilityContext,
-  type CapabilityTool,
 } from "./capability.js"
 
-function makeCtx(workdir: string, workspaceId = "ws-self"): CapabilityContext {
-  return { workspaceId, workdir, issues: [], knowledge: [] }
-}
+// The kernel's capability surface is now exactly one tool — the one that
+// carries no product semantics. The security properties it must hold (workspace
+// scoping, sandbox containment) are the same ones an application inherits when
+// it builds its own capabilities on the exported guards, so they are asserted
+// here rather than in whatever composes them.
 
-function tool(tools: CapabilityTool[], name: string): CapabilityTool {
-  const t = tools.find((x) => x.name === name)
-  if (!t) throw new Error(`no such capability: ${name}`)
-  return t
+function makeCtx(workdir: string, workspaceId = "ws-self"): CapabilityContext {
+  return { workspaceId, workdir }
 }
 
 describe("capability surface (security contract)", () => {
@@ -28,133 +28,42 @@ describe("capability surface (security contract)", () => {
     workdir = await mkdtemp(path.join(tmpdir(), "cap-test-"))
   })
 
-  it("exposes EXACTLY open_issue, write_file, promote_knowledge — no privileged ops", () => {
-    const names = capabilityTools(makeCtx(workdir))
-      .map((t) => t.name)
-      .sort()
-    expect(names).toEqual([...CAPABILITY_TOOL_NAMES].sort())
-
-    // A host application's privileged operations must never leak into the
-    // kernel-hosted surface: no workspace/org lifecycle, membership, or run control.
-    const forbidden = [
-      "run_workflow",
-      "create_workspace",
-      "create_organization",
-      "add_workspace_member",
-      "add_org_member",
-      "invite_user",
-      "approve_run",
-      "reject_run",
-      "list_workspaces",
-    ]
-    for (const f of forbidden) expect(names).not.toContain(f)
-  })
-
-  it("no capability's advertised schema accepts a workspace_id (scope is not agent-selectable)", () => {
-    for (const t of capabilityTools(makeCtx(workdir))) {
-      expect(Object.keys(t.schema)).not.toContain("workspace_id")
-      expect(Object.keys(t.schema)).not.toContain("workspaceId")
-    }
+  it("advertises no workspace_id — scope is not agent-selectable", () => {
+    expect(Object.keys(writeFileCapability(makeCtx(workdir)).schema)).not.toContain("workspace_id")
   })
 
   describe("cross-workspace denial", () => {
-    it("open_issue targeting another workspace is denied and records nothing", async () => {
-      const ctx = makeCtx(workdir, "ws-self")
-      const res = await tool(capabilityTools(ctx), "open_issue").handler({
-        title: "leak",
-        workspace_id: "ws-other",
-      })
-      expect(res.ok).toBe(false)
-      expect(res.error).toMatch(/cross-workspace/i)
-      expect(ctx.issues).toEqual([])
-    })
-
-    it("promote_knowledge targeting another workspace is denied and records nothing", async () => {
-      const ctx = makeCtx(workdir, "ws-self")
-      const res = await tool(capabilityTools(ctx), "promote_knowledge").handler({
-        content: "leak",
-        workspaceId: "ws-other",
-      })
-      expect(res.ok).toBe(false)
-      expect(res.error).toMatch(/cross-workspace/i)
-      expect(ctx.knowledge).toEqual([])
-    })
-
     it("write_file targeting another workspace is denied and writes nothing", async () => {
-      const ctx = makeCtx(workdir, "ws-self")
-      const res = await tool(capabilityTools(ctx), "write_file").handler({
-        path: "note.md",
-        content: "leak",
+      const res = await writeFileCapability(makeCtx(workdir)).handler({
         workspace_id: "ws-other",
+        path: "a.md",
+        content: "leak",
       })
       expect(res.ok).toBe(false)
       expect(res.error).toMatch(/cross-workspace/i)
-      await expect(readFile(path.join(workdir, "note.md"), "utf8")).rejects.toThrow()
+      await expect(readFile(path.join(workdir, "a.md"), "utf8")).rejects.toThrow()
     })
 
     it("a matching workspace_id is allowed (scope is enforced, not merely present-blocked)", async () => {
-      const ctx = makeCtx(workdir, "ws-self")
-      const res = await tool(capabilityTools(ctx), "open_issue").handler({
-        title: "ok",
+      const res = await writeFileCapability(makeCtx(workdir)).handler({
         workspace_id: "ws-self",
+        path: "a.md",
+        content: "ok",
       })
       expect(res.ok).toBe(true)
-      expect(ctx.issues).toEqual([{ title: "ok" }])
-    })
-  })
-
-  describe("open_issue", () => {
-    it("records a dedup-keyed, labelled issue into the run's sink", async () => {
-      const ctx = makeCtx(workdir)
-      const res = await tool(capabilityTools(ctx), "open_issue").handler({
-        title: "Renewal scan",
-        body: "2 due",
-        dedupe_key: "renewal-scan",
-        labels: ["ops", "renewals"],
-      })
-      expect(res.ok).toBe(true)
-      expect(ctx.issues).toEqual([
-        {
-          title: "Renewal scan",
-          body: "2 due",
-          dedupe_key: "renewal-scan",
-          labels: ["ops", "renewals"],
-        },
-      ])
     })
 
-    it("rejects a missing title without recording", async () => {
-      const ctx = makeCtx(workdir)
-      const res = await tool(capabilityTools(ctx), "open_issue").handler({ body: "x" })
-      expect(res.ok).toBe(false)
-      expect(ctx.issues).toEqual([])
-    })
-  })
-
-  describe("promote_knowledge", () => {
-    it("records knowledge with optional title/kind", async () => {
-      const ctx = makeCtx(workdir)
-      const res = await tool(capabilityTools(ctx), "promote_knowledge").handler({
-        content: "prefer X",
-        title: "Pref",
-        kind: "decision",
-      })
-      expect(res.ok).toBe(true)
-      expect(ctx.knowledge).toEqual([{ content: "prefer X", title: "Pref", kind: "decision" }])
-    })
-
-    it("rejects missing content without recording", async () => {
-      const ctx = makeCtx(workdir)
-      const res = await tool(capabilityTools(ctx), "promote_knowledge").handler({ title: "x" })
-      expect(res.ok).toBe(false)
-      expect(ctx.knowledge).toEqual([])
+    it("denyCrossWorkspace is exported so app capabilities inherit the same guard", () => {
+      expect(denyCrossWorkspace({ workspace_id: "ws-other" }, "ws-self")?.ok).toBe(false)
+      expect(denyCrossWorkspace({ workspaceId: "ws-other" }, "ws-self")?.ok).toBe(false)
+      expect(denyCrossWorkspace({ workspace_id: "ws-self" }, "ws-self")).toBeNull()
+      expect(denyCrossWorkspace({}, "ws-self")).toBeNull()
     })
   })
 
   describe("write_file", () => {
     it("writes within the sandbox, creating parent directories", async () => {
-      const ctx = makeCtx(workdir)
-      const res = await tool(capabilityTools(ctx), "write_file").handler({
+      const res = await writeFileCapability(makeCtx(workdir)).handler({
         path: "reports/out.md",
         content: "# hi",
       })
@@ -163,8 +72,7 @@ describe("capability surface (security contract)", () => {
     })
 
     it("refuses a path that escapes the sandbox and writes nothing outside", async () => {
-      const ctx = makeCtx(workdir)
-      const res = await tool(capabilityTools(ctx), "write_file").handler({
+      const res = await writeFileCapability(makeCtx(workdir)).handler({
         path: "../escape.md",
         content: "leak",
       })
@@ -176,9 +84,8 @@ describe("capability surface (security contract)", () => {
     })
 
     it("refuses an absolute path", async () => {
-      const ctx = makeCtx(workdir)
       const outside = path.join(await mkdtemp(path.join(tmpdir(), "cap-out-")), "abs.md")
-      const res = await tool(capabilityTools(ctx), "write_file").handler({
+      const res = await writeFileCapability(makeCtx(workdir)).handler({
         path: outside,
         content: "leak",
       })
@@ -188,13 +95,9 @@ describe("capability surface (security contract)", () => {
     })
 
     it("rejects a missing path or non-string content", async () => {
-      const ctx = makeCtx(workdir)
-      expect((await tool(capabilityTools(ctx), "write_file").handler({ content: "x" })).ok).toBe(
-        false,
-      )
-      expect((await tool(capabilityTools(ctx), "write_file").handler({ path: "a.md" })).ok).toBe(
-        false,
-      )
+      const cap = writeFileCapability(makeCtx(workdir))
+      expect((await cap.handler({ content: "x" })).ok).toBe(false)
+      expect((await cap.handler({ path: "a.md" })).ok).toBe(false)
     })
 
     it("does not disturb a pre-existing file outside the escape attempt", async () => {
@@ -202,13 +105,17 @@ describe("capability surface (security contract)", () => {
       const sibling = path.join(path.dirname(workdir), "cap-sibling.txt")
       await mkdir(path.dirname(sibling), { recursive: true })
       await writeFile(sibling, "original")
-      const ctx = makeCtx(workdir)
-      await tool(capabilityTools(ctx), "write_file").handler({
+      await writeFileCapability(makeCtx(workdir)).handler({
         path: "../cap-sibling.txt",
         content: "hacked",
       })
       expect(await readFile(sibling, "utf8")).toBe("original")
       await rm(sibling, { force: true })
+    })
+
+    it("resolveWithin is exported and refuses escapes", () => {
+      expect(resolveWithin(workdir, "a/b.md")).toBe(path.join(workdir, "a/b.md"))
+      expect(() => resolveWithin(workdir, "../out.md")).toThrow(/escapes sandbox/i)
     })
   })
 })

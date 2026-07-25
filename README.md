@@ -43,7 +43,7 @@ ESM-only, Node >= 22.
 | **Agent loop** | `runAgent()` — a provider-neutral tool-use loop with step and wall-clock budgets |
 | **Tools** | `Tool`, `primitiveTools()` (`run_code`, `read_file`, `list_files`, `http_fetch`), `connectorTools()`, `modelAsTool()`, metadata + projections |
 | **Connectors** | `connectMcp()` — MCP clients over stdio / streamable HTTP / SSE |
-| **Engines** | The `AgentEngine` seam + `native`, `claude-code`, and `codex` harnesses, plus the shared capability surface |
+| **Engines** | The `AgentEngine` seam + `native`, `claude-code`, and `codex` harnesses, plus the capability *mechanism* (scope guards, a generic `write_file`, and MCP/stdio transports) — the capability *set* is yours to inject |
 | **Routing** | `RouteResolver` + `StaticRouteResolver` — capability → model, prompt, tools |
 | **Context** | `ContextProvider` chain, assembled in parallel and rendered into the prompt |
 | **Secrets** | `secretsToEnv()` — resolved secret values into an exec environment |
@@ -147,32 +147,43 @@ model "an edit" uniformly.
 ```ts
 import { selectEngine } from "@rarebit-one/harness-kernel"
 
-const engine = selectEngine("native") // "claude-code" | "codex" | unknown → native
+const engine = selectEngine("native", { domainTools }) // "claude-code" | "codex" | unknown → native
 const support = engine.supports(spec)
 if (!support.ok) throw new Error(support.reason) // fail loud, never silently degrade
-const { text, knowledge, issues } = await engine.run(spec, { log: console.error })
+const { text } = await engine.run(spec, { log: console.error })
 ```
 
-### Generic vs. domain tools
+### The kernel defines no domain tools
 
-`primitiveTools()` is strictly generic — sandboxed shell/file/HTTP access.
-The two **emission** tools (`promote_knowledge`, `record_issue`) that collect
-application-domain output are a separate, injectable factory, `emissionTools()`,
-so an application composes them in rather than inheriting them:
+`primitiveTools()` is strictly generic — sandboxed shell/file/HTTP access. Tools
+that collect **application** output don't exist here at all: what a run may emit
+is your vocabulary, so you define it and inject it.
 
 ```ts
-import { primitiveTools, emissionTools } from "@rarebit-one/harness-kernel"
+import { primitiveTools, writeFileCapability, denyCrossWorkspace } from "@rarebit-one/harness-kernel"
 
-const knowledge = []
-const issues = []
-const tools = [
-  ...primitiveTools(workdir, env, allowed, allowHosts),
-  ...emissionTools({ knowledge, issues }, allowed),
-]
+// Your sinks, your tools — the kernel never sees them.
+const knowledge: MyNote[] = []
+const domainTools = (allowed?: string[]) => myEmissionTools({ knowledge }, allowed)
+
+const engine = selectEngine("native", { domainTools })
 ```
 
-`NativeEngine` composes exactly this pair by default, and accepts a replacement
-factory via `new NativeEngine({ domainTools })`.
+The same holds for the workspace-scoped **capabilities** the external engines
+mount over MCP. The kernel ships exactly one — `writeFileCapability`, a sandbox
+write with no product semantics — plus the guards (`denyCrossWorkspace`,
+`resolveWithin`) so your own capabilities inherit identical security properties:
+
+```ts
+selectEngine("claude-code", {
+  capabilityTools: (ctx) => [writeFileCapability(ctx), ...myCapabilities(ctx)],
+})
+
+// codex runs out-of-process, so it needs a script it can spawn — a child
+// process can't be handed a closure. Omitting it throws rather than serving an
+// empty surface.
+selectEngine("codex", { capabilityServerScript: "/app/dist/my-capability-server.js" })
+```
 
 ## Development
 

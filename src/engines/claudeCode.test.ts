@@ -55,9 +55,9 @@ describe("ClaudeCodeEngine.run", () => {
     expect(result.text).toBe("## Done")
     expect(result.knowledge).toEqual([])
     // The engine hands the driver its runner-hosted capability surface.
-    expect(captured?.mcpTools?.map((t) => t.name).sort()).toEqual(
-      ["open_issue", "promote_knowledge", "write_file"].sort(),
-    )
+    // The kernel's default surface is the one capability with no product
+    // semantics; an application injects the rest.
+    expect(captured?.mcpTools?.map((t) => t.name)).toEqual(["write_file"])
     expect(captured?.cwd).toBe("/sandbox/x")
     expect(captured?.model).toBe("claude-sonnet-4-6")
     expect(captured?.apiKey).toBe("sk-org")
@@ -110,21 +110,29 @@ describe("ClaudeCodeEngine.run", () => {
     expect(captured?.allowedTools).toBeUndefined()
   })
 
-  it("emits issues + knowledge when the agent uses the capability surface (parity with native)", async () => {
-    process.env.ANTHROPIC_API_KEY = "sk-env"
-    // A driver that drives the run by invoking the capability tools it was handed,
-    // exactly as the real Claude Code harness would via the mounted MCP server.
-    async function* driver(opts: ClaudeCodeOptions): AsyncIterable<ClaudeCodeMessage> {
-      const byName = (n: string) => opts.mcpTools?.find((t) => t.name === n)
-      await byName("open_issue")?.handler({ title: "Look at this", dedupe_key: "k" })
-      await byName("promote_knowledge")?.handler({ content: "learned X" })
-      yield { kind: "result", text: "## Done", isError: false }
-    }
+  it("exposes an injected capability surface to the driver", async () => {
+    // The kernel no longer knows what an application emits; it only guarantees
+    // the surface it is handed reaches the engine. The Jumpdrive-specific
+    // emission capabilities and their round-trip live in that application.
+    let captured: ClaudeCodeOptions | undefined
+    const engine = new ClaudeCodeEngine(
+      async function* (opts: ClaudeCodeOptions): AsyncIterable<ClaudeCodeMessage> {
+        captured = opts
+        yield { kind: "result", text: "done", isError: false }
+      },
+      (ctx) => [
+        {
+          name: "app_capability",
+          description: `an application capability scoped to ${ctx.workspaceId}`,
+          schema: {},
+          handler: () => Promise.resolve({ ok: true }),
+        },
+      ],
+    )
 
-    const result = await new ClaudeCodeEngine(driver).run(spec(), recordingCtx())
+    await engine.run(spec(), { log: () => {} })
 
-    expect(result.issues).toEqual([{ title: "Look at this", dedupe_key: "k" }])
-    expect(result.knowledge).toEqual([{ content: "learned X" }])
+    expect(captured?.mcpTools?.map((t) => t.name)).toEqual(["app_capability"])
   })
 
   it("returns a fallback and notes an error when the harness ends in error", async () => {

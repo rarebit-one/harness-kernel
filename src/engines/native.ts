@@ -2,23 +2,23 @@ import { runAgent } from "../agent.js"
 import { assembleContext, renderContext, type ContextProvider } from "../context/types.js"
 import { selectProvider } from "../providers/index.js"
 import { secretsToEnv } from "../secrets.js"
-import { primitiveTools, connectorTools, emissionTools } from "../tools/registry.js"
-import type { EmissionSinks, Tool } from "../tools/registry.js"
-import type { IssueEntry, KnowledgeEntry, WorkflowDefinition } from "../types.js"
+import { primitiveTools, connectorTools } from "../tools/registry.js"
+import type { Tool } from "../tools/registry.js"
+import type { WorkflowDefinition } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 
 /**
- * Builds the non-generic tools a run gets on top of the primitives, bound to
- * the run's emission sinks and gated by the same permissions allowlist.
+ * Builds the non-generic tools a run gets on top of the primitives, gated by the
+ * same permissions allowlist. An application closes over whatever sinks it wants
+ * the results to land in — the kernel neither supplies nor inspects them.
  */
-export type DomainToolFactory = (sinks: EmissionSinks, allowed?: string[]) => Tool[]
+export type DomainToolFactory = (allowed?: string[]) => Tool[]
 
 export interface NativeEngineOptions {
   /**
    * Application tools composed in alongside the generic primitives. Defaults to
-   * the kernel's {@link emissionTools} (promote_knowledge + record_issue), which
-   * is what fills {@link EngineResult.knowledge} / `.issues`. Pass your own to
-   * swap or extend that surface without subclassing the engine.
+   * none: the kernel ships no domain tools, because what a run may emit is the
+   * application's vocabulary. Pass a factory to add them.
    */
   domainTools?: DomainToolFactory
   /**
@@ -43,7 +43,7 @@ export class NativeEngine implements AgentEngine {
   private readonly contextProviders: ContextProvider[]
 
   constructor(options: NativeEngineOptions = {}) {
-    this.domainTools = options.domainTools ?? emissionTools
+    this.domainTools = options.domainTools ?? (() => [])
     this.contextProviders = options.contextProviders ?? []
   }
 
@@ -62,17 +62,12 @@ export class NativeEngine implements AgentEngine {
     const env = secretsToEnv(spec.secrets)
     const allowed = Array.isArray(spec.permissions.tools) ? spec.permissions.tools : undefined
     const allowHosts = Array.isArray(spec.permissions.hosts) ? spec.permissions.hosts : undefined
-    // Collects knowledge the agent records via the `promote_knowledge` tool;
-    // folded into the result for the caller to route onward.
-    const knowledge: KnowledgeEntry[] = []
-    // Collects issues the agent opens via the `record_issue` tool; folded into
-    // the result for the caller to route onward.
-    const issues: IssueEntry[] = []
     // Generic primitives + the application's own domain tools, both gated by the
-    // run's permissions allowlist.
+    // run's permissions allowlist. Anything the domain tools collect goes to
+    // sinks the application owns; the kernel never sees them.
     const primitives = [
       ...primitiveTools(spec.workdir, env, allowed, allowHosts),
-      ...this.domainTools({ knowledge, issues }, allowed),
+      ...this.domainTools(allowed),
     ]
     // Connector tools are NOT re-gated by permissions.tools: the caller
     // already authorized them per connector (scope + grants) when it populated
@@ -93,7 +88,7 @@ export class NativeEngine implements AgentEngine {
           ? { maxDurationMs: spec.limits.maxDurationMs }
           : {}),
       })
-      return { text, knowledge, issues }
+      return { text, knowledge: [], issues: [] }
     } finally {
       // Connectors are only needed during the loop; close them here (the engine
       // opened them) regardless of how run() exits.

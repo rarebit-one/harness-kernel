@@ -1,20 +1,37 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import path from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { readEmissions } from "./capabilityEmissions.js"
-import { buildCapabilityStdioServer, serveCapability } from "./capabilityStdio.js"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { z } from "zod"
+import type { CapabilityTool } from "./capability.js"
+import {
+  buildCapabilityStdioServer,
+  capabilityStdioConfigFromEnv,
+  serveCapability,
+  type CapabilityStdioOptions,
+} from "./capabilityStdio.js"
 
-/** Connect a client to a freshly built capability server over a linked in-memory pair. */
-async function connectClient(config: {
-  workspaceId: string
-  workdir: string
-  emissionsFile: string
-}): Promise<{ client: Client; close: () => Promise<void> }> {
+// This module is the out-of-process transport, not a capability set: it serves
+// whatever it is handed and fires `afterCall` so the spawning process can get
+// state back across the process boundary. What that state *means* belongs to the
+// application, so the fakes here are deliberately domain-free.
+
+const echo = (name: string, onCall?: () => void): CapabilityTool => ({
+  name,
+  description: `the ${name} capability`,
+  schema: { value: z.string().optional() },
+  handler: (input) => {
+    onCall?.()
+    // "fail" is schema-valid but semantically refused, so the handler actually
+    // runs — a schema-invalid input would be rejected upstream and never reach it.
+    return Promise.resolve(input.value === "fail" ? { ok: false, error: "refused" } : { ok: true })
+  },
+})
+
+async function connectClient(
+  options: CapabilityStdioOptions,
+): Promise<{ client: Client; close: () => Promise<void> }> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-  const server = buildCapabilityStdioServer(config)
+  const server = buildCapabilityStdioServer(options)
   await server.connect(serverTransport)
   const client = new Client({ name: "test", version: "0.0.0" })
   await client.connect(clientTransport)
@@ -27,93 +44,82 @@ async function connectClient(config: {
   }
 }
 
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
 describe("capability stdio server", () => {
-  let workdir: string
-  let emitDir: string
-  let emissionsFile: string
-  beforeEach(async () => {
-    workdir = await mkdtemp(path.join(tmpdir(), "capstdio-wd-"))
-    emitDir = await mkdtemp(path.join(tmpdir(), "capstdio-emit-"))
-    emissionsFile = path.join(emitDir, "emissions.json")
-  })
-  afterEach(async () => {
-    await rm(workdir, { recursive: true, force: true })
-    await rm(emitDir, { recursive: true, force: true })
-  })
-
-  it("exposes exactly the three capability tools over MCP", async () => {
-    const { client, close } = await connectClient({
-      workspaceId: "ws-self",
-      workdir,
-      emissionsFile,
-    })
+  it("advertises exactly the tools it was given", async () => {
+    const { client, close } = await connectClient({ tools: [echo("alpha"), echo("beta")] })
     const listed = await client.listTools()
-    expect(listed.tools.map((t) => t.name).sort()).toEqual(
-      ["open_issue", "promote_knowledge", "write_file"].sort(),
-    )
+    expect(listed.tools.map((t) => t.name).sort()).toEqual(["alpha", "beta"])
     await close()
   })
 
-  it("persists open_issue + promote_knowledge to the emissions file (read back by the engine)", async () => {
-    const { client, close } = await connectClient({
-      workspaceId: "ws-self",
-      workdir,
-      emissionsFile,
-    })
-    await client.callTool({ name: "open_issue", arguments: { title: "look", dedupe_key: "k" } })
-    await client.callTool({ name: "promote_knowledge", arguments: { content: "learned X" } })
-
-    expect(await readEmissions(emissionsFile)).toEqual({
-      issues: [{ title: "look", dedupe_key: "k" }],
-      knowledge: [{ content: "learned X" }],
-    })
+  it("an empty surface yields a server that does not even advertise tools", async () => {
+    // The SDK only registers the tools/* methods once something is registered,
+    // so an empty surface is not a quiet no-op server — it cannot list tools at
+    // all. That is why selectEngine refuses codex without a capability script:
+    // the failure would otherwise surface here, far from its cause.
+    const { client, close } = await connectClient({ tools: [] })
+    await expect(client.listTools()).rejects.toThrow(/Method not found/i)
     await close()
   })
 
-  it("write_file lands in the sandbox (not the emissions file)", async () => {
-    const { client, close } = await connectClient({
-      workspaceId: "ws-self",
-      workdir,
-      emissionsFile,
-    })
-    await client.callTool({ name: "write_file", arguments: { path: "out.md", content: "# hi" } })
-    expect(await readFile(path.join(workdir, "out.md"), "utf8")).toBe("# hi")
+  it("routes a call to the matching handler and returns its result", async () => {
+    const { client, close } = await connectClient({ tools: [echo("alpha")] })
+    const result = await client.callTool({ name: "alpha", arguments: { value: "x" } })
+    expect(JSON.stringify(result.content)).toContain('{\\"ok\\":true}')
     await close()
   })
 
-  it("does not advertise workspace_id — scope is not selectable over MCP", async () => {
-    const { client, close } = await connectClient({
-      workspaceId: "ws-self",
-      workdir,
-      emissionsFile,
-    })
-    const listed = await client.listTools()
-    for (const t of listed.tools) {
-      const props = (t.inputSchema?.properties ?? {}) as Record<string, unknown>
-      expect(Object.keys(props)).not.toContain("workspace_id")
-      expect(Object.keys(props)).not.toContain("workspaceId")
-    }
-    // A stray workspace_id is stripped by the tool schema, so an emit can only ever
-    // land in the bound workspace (the handler-level denial is covered in
-    // capability.test.ts). Prove the redirect attempt is neutralized, not honored.
-    await client.callTool({
-      name: "open_issue",
-      arguments: { title: "confined", workspace_id: "ws-other" },
-    })
-    expect(await readEmissions(emissionsFile)).toEqual({
-      issues: [{ title: "confined" }],
-      knowledge: [],
-    })
+  it("fires afterCall after every call — the seam for crossing the process boundary", async () => {
+    const afterCall = vi.fn(() => Promise.resolve())
+    const { client, close } = await connectClient({ tools: [echo("alpha")], afterCall })
+
+    await client.callTool({ name: "alpha", arguments: { value: "x" } })
+    await client.callTool({ name: "alpha", arguments: { value: "y" } })
+
+    expect(afterCall).toHaveBeenCalledTimes(2)
+    await close()
+  })
+
+  it("fires afterCall even when the handler reports failure", async () => {
+    const afterCall = vi.fn(() => Promise.resolve())
+    const { client, close } = await connectClient({ tools: [echo("alpha")], afterCall })
+
+    await client.callTool({ name: "alpha", arguments: { value: "fail" } })
+
+    expect(afterCall).toHaveBeenCalledTimes(1)
     await close()
   })
 
   it("serveCapability connects a server over the given transport", async () => {
     const [, serverTransport] = InMemoryTransport.createLinkedPair()
-    const server = await serveCapability(
-      { workspaceId: "w", workdir, emissionsFile },
-      serverTransport,
-    )
+    const server = await serveCapability({ tools: [echo("alpha")] }, serverTransport)
     expect(server).toBeDefined()
     await server.close()
+  })
+})
+
+describe("capabilityStdioConfigFromEnv", () => {
+  it("reads the spawn contract from the environment", () => {
+    vi.stubEnv("HARNESS_WORKSPACE_ID", "ws-1")
+    vi.stubEnv("HARNESS_WORKDIR", "/tmp/wd")
+    vi.stubEnv("HARNESS_EMISSIONS_FILE", "/tmp/emit.json")
+
+    expect(capabilityStdioConfigFromEnv()).toEqual({
+      workspaceId: "ws-1",
+      workdir: "/tmp/wd",
+      emissionsFile: "/tmp/emit.json",
+    })
+  })
+
+  it("fails loud when the contract is incomplete", () => {
+    vi.stubEnv("HARNESS_WORKSPACE_ID", "ws-1")
+    vi.stubEnv("HARNESS_WORKDIR", "")
+    vi.stubEnv("HARNESS_EMISSIONS_FILE", "/tmp/emit.json")
+
+    expect(() => capabilityStdioConfigFromEnv()).toThrow(/HARNESS_WORKSPACE_ID/)
   })
 })
