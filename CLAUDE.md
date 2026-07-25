@@ -58,6 +58,17 @@ sits above, registry below, `ModelRef` is the handoff.
 
 ## Development
 
+A devcontainer is available (`.devcontainer/`) and is how this runs on
+mac-mini-1 alongside the workspace's other projects. It is deliberately
+**portless**: the kernel is a library, so unlike the web apps there is no
+server to publish, no Caddy route and no SSH-tunnel entry — it exists for a
+reproducible Node 22 toolchain, not to be reached from a browser.
+
+`node_modules` lives in a named volume rather than the bind mount, so the
+container's Linux install and the host's macOS install don't overwrite each
+other. That matters because arch-specific optional packages arrive through the
+dependency tree; a shared `node_modules` breaks whichever side installed last.
+
 ```bash
 npm ci
 npm test               # vitest run

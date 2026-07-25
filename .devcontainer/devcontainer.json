@@ -1,0 +1,14 @@
+// For format details, see https://containers.dev/implementors/json_reference/.
+{
+  "name": "harness-kernel",
+  "dockerComposeFile": "compose.yaml",
+  "service": "app",
+  "workspaceFolder": "/workspace",
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
+  },
+  // `npm ci` populates the named node_modules volume. The kernel's only
+  // dependency that needs anything unusual is itself — everything resolves from
+  // the registry, and there is no database or service to wait on.
+  "postCreateCommand": "npm ci && (npm install -g @anthropic-ai/claude-code || echo 'Note: Claude Code installation failed. Install manually with: npm install -g @anthropic-ai/claude-code')"
+}
