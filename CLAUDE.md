@@ -118,6 +118,23 @@ create a Release, or flip the repo public without explicit sign-off. Everything
 is arranged so the flip is a visibility toggle plus a first Release, not a
 refactor.
 
+## CI
+
+| Workflow | Trigger | What it does |
+|----------|---------|--------------|
+| `test.yml` | PR + push to main | typecheck → lint → format:check → test → build → `.d.ts` emit check → `npm pack` |
+| `security.yml` | PR + push to main | advisory `npm audit` |
+| `claude-code-review.yml` | non-draft PR | automated review, via the org-shared reusable |
+| `claude.yml` | `@claude` mention | agent responds on issues/PRs |
+| `dependabot-auto-merge.yml` | Dependabot PR | auto-lands green patch/minor bumps |
+| `publish.yml` | GitHub Release only | **dormant** — see below |
+
+The three agentic/automation workflows are **thin callers** into
+`rarebit-one/.github` (public, so they keep working after a public flip). Model,
+effort and prompt live in the reusables, not here — don't fork the logic into
+this repo. `.pinact.yaml` exempts first-party org refs, so the `@main` refs are
+intentional and won't trip the pin check.
+
 ## Git hooks (lefthook)
 
 `lefthook.yml` at the repo root (installed by `npm install`'s prepare script).
