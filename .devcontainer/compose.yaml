@@ -1,0 +1,25 @@
+name: "harnesskernel"
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+
+    volumes:
+      - ..:/workspace:z,cached
+      # node_modules lives in a named volume rather than the bind mount, so the
+      # container's Linux install and the host's macOS install stay independent.
+      # This is not cosmetic: @anthropic-ai/claude-agent-sdk (via the kernel's
+      # own dependencies) ships arch-specific optional packages, so a shared
+      # node_modules means whichever side ran `npm ci` last breaks the other.
+      - node-modules:/workspace/node_modules
+
+    # No ports. The kernel is a library — it has no server, so there is nothing
+    # to publish, no Caddy route and no SSH-tunnel entry. Contrast the web apps
+    # in this workspace, which each own a port pair (see the workspace CLAUDE.md
+    # "Multi-App Dev Infrastructure").
+    command: sleep infinity
+
+volumes:
+  node-modules:
