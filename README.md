@@ -38,12 +38,83 @@ ESM-only, Node >= 22.
 
 | Area | Exports |
 |------|---------|
-| **Providers** | `Provider` interface + `selectProvider()` over Anthropic, OpenAI, OpenRouter, and an offline `mock` |
+| **Model seam** | `ModelInvocation` — one arrow for every model kind, with declared capabilities, a uniform result envelope and `probe()` |
+| **Providers** | `Provider` interface + `selectProvider()` over Anthropic, OpenAI, OpenRouter, and an offline `mock`; `chatModel()` puts any of them on the seam |
 | **Agent loop** | `runAgent()` — a provider-neutral tool-use loop with step and wall-clock budgets |
-| **Tools** | `Tool`, `primitiveTools()` (`run_code`, `read_file`, `list_files`, `http_fetch`), `connectorTools()` |
+| **Tools** | `Tool`, `primitiveTools()` (`run_code`, `read_file`, `list_files`, `http_fetch`), `connectorTools()`, `modelAsTool()`, metadata + projections |
 | **Connectors** | `connectMcp()` — MCP clients over stdio / streamable HTTP / SSE |
 | **Engines** | The `AgentEngine` seam + `native`, `claude-code`, and `codex` harnesses, plus the shared capability surface |
+| **Routing** | `RouteResolver` + `StaticRouteResolver` — capability → model, prompt, tools |
+| **Context** | `ContextProvider` chain, assembled in parallel and rendered into the prompt |
 | **Secrets** | `secretsToEnv()` — resolved secret values into an exec environment |
+
+## Extension points
+
+The kernel is meant to be extended from outside, never patched from inside.
+There are six seams, and each ships with the in-process default that makes it
+usable on its own — no database, no service, no infrastructure.
+
+**1. Model kinds.** A chat LLM is one kind among several. Register any other and
+resolve it back through the same call:
+
+```ts
+import { ModelRegistry, chatModel, selectProvider } from "@rarebit-one/harness-kernel"
+
+const registry = new ModelRegistry()
+  .registerInstance(chatModel(selectProvider("anthropic")))
+  .register({ kind: "vision.detect", id: "yolo" }, () => myDetector)
+
+const detector = registry.resolve<DetectRequest, DetectionResult>({
+  kind: "vision.detect",
+  id: "yolo",
+})
+```
+
+`Req` and `Res` stay typed per kind — the seam unifies the arrow and the
+envelope (`ModelResult`, `InvokeContext`, `ModelCaps`, `probe`), never the
+payload. An unresolved ref throws rather than returning `undefined`.
+
+**2. Route resolution.** One layer up: which model, prompt and tools serve a
+named capability. `StaticRouteResolver` is capabilities-as-code; a dynamic
+resolver is your adapter behind the same interface.
+
+```ts
+const resolver = new StaticRouteResolver([
+  { name: "summarise", model: { kind: "chat", id: "anthropic" }, prompt: "Summarise." },
+])
+const route = await resolver.resolve("summarise")
+const model = registry.resolve(route.model) // the resolver picks, the registry binds
+```
+
+**3. Middleware.** Payload-blind, so one implementation covers every kind:
+
+```ts
+const model = withMiddleware(anyModel, [correlationMiddleware(), loggingMiddleware()])
+```
+
+**4. Engines.** The `AgentEngine` seam — `native`, `claude-code`, `codex`, or
+your own. File mutations stay out of band.
+
+**5. Context providers.** Replace a single pre-baked context string with a
+chain, so a live source can inject fragments:
+
+```ts
+new NativeEngine({ contextProviders: [myLiveFeed] })
+```
+
+Providers run in parallel; one that fails is logged and skipped rather than
+failing the run.
+
+**6. Tools.** Rich metadata (capability scoping, invocation-mode gating,
+confirmation, reversibility, retention, client visibility) with lossy
+projections down to what a provider actually needs — and `modelAsTool()`, which
+surfaces any model invocation as a callable tool. That last one is the cleanest
+form of extension: a perception model becomes something the chat loop can call
+without the loop, the engines, or any kernel code learning perception exists.
+
+Capabilities are **checked, not assumed**: asking a model to stream when it
+declared `streaming: false` throws a `CapabilityError` instead of quietly
+returning a buffered response.
 
 ## Usage
 

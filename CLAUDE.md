@@ -26,13 +26,35 @@ around — the kernel never bends to a consumer.
 |------|------------|
 | `src/index.ts` | The public API. Anything not re-exported here is internal. |
 | `src/types.ts` | The five shared shapes callers hand in: `ConnectorConfig`, `Permissions`, `WorkflowDefinition`, `KnowledgeEntry`, `IssueEntry`. |
+| `src/models/` | The `ModelInvocation` seam (`types.ts`), the `chat` kind + `Provider` adapter (`chat.ts`), the kind registry (`registry.ts`), middleware (`middleware.ts`) |
+| `src/routing/` | `RouteResolver` + the built-in `StaticRouteResolver` (capabilities as code) |
+| `src/context/` | `ContextProvider` chain — `assembleContext` / `renderContext` |
 | `src/providers/` | `Provider` interface + anthropic / openai / openrouter / mock adapters, `selectProvider` |
-| `src/agent.ts` | `runAgent` — the provider-neutral tool-use loop |
-| `src/tools/registry.ts` | `Tool`, `primitiveTools` (generic), `emissionTools` (domain, injectable), `connectorTools` |
+| `src/agent.ts` | `runAgent` — the tool-use loop, driven through the model seam |
+| `src/tools/` | `Tool` + `primitiveTools` (generic) / `emissionTools` (domain, injectable) / `connectorTools`; `metadata.ts` (scoping + projections); `modelTool.ts` (a model surfaced as a tool) |
 | `src/primitives/` | Sandbox primitives: `codeExec`, `fs`, `http`, `download` |
-| `src/connectors/` | `connectMcp` — MCP over stdio / streamable HTTP / SSE |
 | `src/engines/` | The `AgentEngine` seam + native / claude-code / codex harnesses + the shared capability surface |
 | `src/secrets.ts` | `secretsToEnv` |
+
+## The six extension points
+
+An application extends the kernel through these seams. It should never need to
+patch or fork kernel code to add a model kind, a route source, a context source
+or a tool.
+
+| # | Seam | Where | Kernel ships |
+|---|------|-------|--------------|
+| 1 | **Model kinds** | `ModelRegistry` | binds `kind`+`id` → `ModelInvocation`; fails loud when unresolved |
+| 2 | **Route resolution** | `RouteResolver` | `StaticRouteResolver` (code/config, zero infrastructure) |
+| 3 | **Middleware** | `Middleware` | correlation, logging, health tracking, error redaction |
+| 4 | **Engines** | `AgentEngine` | native / claude-code / codex |
+| 5 | **Context providers** | `ContextProvider` | parallel assembly + rendering; wired into `NativeEngine` |
+| 6 | **Tools** | `Tool` + `ToolMetadata` | primitives, emissions, MCP connectors, projections, `modelAsTool` |
+
+**Points 1 and 2 are different layers and must not be conflated.** A resolver
+answers "which model, prompt and tools should capability X use?" and hands back
+a `ModelRef`; the registry answers "which implementation is that ref?". Resolver
+sits above, registry below, `ModelRef` is the handoff.
 
 ## Development
 
@@ -56,6 +78,16 @@ Don't add tests that require a live provider key.
   perception routing, an orchestration plane, a product's data model — belongs
   in that application's own harness layer, not here. When you feel the urge to
   add it here, that urge is the signal it goes elsewhere.
+- **Seams, not implementations.** The kernel ships an interface plus the
+  in-process/static default that makes it usable with **zero infrastructure**.
+  It ships no database, no schema, no control plane, no prompt-version store. A
+  DB-backed `RouteResolver` is an app-layer adapter *behind* the interface —
+  never in here. The tell that a seam has drifted: a field or a default that
+  only makes sense for one product's tables.
+- **Payload types are per kind; only the envelope is shared.** `ModelInvocation`
+  keeps `Req`/`Res` generic on purpose. Collapsing a chat request and an image
+  buffer into one `unknown` would erase the typing that makes a detection or
+  forecast result worth having. Unify the arrow, never the payload.
 - **One-way dependencies, always.** `app layer → kernel`, never the reverse. The
   kernel must never import, name, or special-case a consumer.
 - **Brand-neutral, no exceptions.** No product, company, or repo name appears in

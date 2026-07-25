@@ -36,16 +36,96 @@ export type { OpenRouterAttribution } from "./providers/openrouter.js"
 export { MockProvider } from "./providers/mock.js"
 
 // ---------------------------------------------------------------------------
+// The model seam — the neutral arrow every model kind is invoked through
+// ---------------------------------------------------------------------------
+export {
+  emitCompleteToolCall,
+  invokeStreaming,
+  modelIdentity,
+  requireCapability,
+  CapabilityError,
+} from "./models/types.js"
+export type {
+  ModelInvocation,
+  ModelKind,
+  ModelCaps,
+  ModelIdentity,
+  ModelResult,
+  InvokeContext,
+  StreamSink,
+  Usage,
+  TokenUsage,
+  UnitUsage,
+  Health,
+  HealthStatus,
+} from "./models/types.js"
+
+// The chat kind, and the adapter that puts an existing Provider on the seam.
+export { chatModel, asChatModel, isChatModel, chatRequest, CHAT_KIND } from "./models/chat.js"
+export type { ChatModel, ChatRequest, ChatResponse, ChatPart, BinaryRef } from "./models/chat.js"
+
+// Extension point 1 — bind kind+id to a concrete invocation.
+export { ModelRegistry, UnknownModelError } from "./models/registry.js"
+export type { ModelRef, ModelFactory, ModelSupport } from "./models/registry.js"
+
+// Extension point 3 — cross-cutting concerns over every kind, uniformly.
+export {
+  withMiddleware,
+  correlationMiddleware,
+  loggingMiddleware,
+  healthTrackingMiddleware,
+  errorRedactionMiddleware,
+  HealthTracker,
+} from "./models/middleware.js"
+export type { Middleware, Invoker, StreamInvoker } from "./models/middleware.js"
+
+// ---------------------------------------------------------------------------
+// Extension point 2 — route resolution (capability → model + prompt + tools)
+// ---------------------------------------------------------------------------
+export { StaticRouteResolver } from "./routing/staticResolver.js"
+export { UnknownCapabilityError } from "./routing/types.js"
+export type {
+  RouteResolver,
+  RouteContext,
+  RouteLimits,
+  CapabilityDefinition,
+  ResolvedRoute,
+} from "./routing/types.js"
+
+// ---------------------------------------------------------------------------
+// Extension point 5 — pluggable context assembly
+// ---------------------------------------------------------------------------
+export { assembleContext, renderContext } from "./context/types.js"
+export type { ContextProvider, ContextFragment, ContextSpec } from "./context/types.js"
+
+// ---------------------------------------------------------------------------
 // The tool-use loop
 // ---------------------------------------------------------------------------
 export { runAgent, maxToolResultBytes } from "./agent.js"
 export type { RunAgentOptions } from "./agent.js"
 
 // ---------------------------------------------------------------------------
-// Tools — generic primitives, injectable domain emissions, MCP connectors
+// Extension point 6 — tools: generic primitives, injectable domain emissions,
+// MCP connectors, rich metadata + projections, and models-as-tools
 // ---------------------------------------------------------------------------
-export { primitiveTools, emissionTools, connectorTools } from "./tools/registry.js"
-export type { Tool, EmissionSinks } from "./tools/registry.js"
+export { primitiveTools, emissionTools, connectorTools, executeTool } from "./tools/registry.js"
+export type { Tool, ToolOutput, EmissionSinks } from "./tools/registry.js"
+export {
+  selectTools,
+  isToolVisible,
+  toToolSpecs,
+  toolsRequiringConfirmation,
+  undoToolFor,
+} from "./tools/metadata.js"
+export type {
+  ToolMetadata,
+  ToolSelection,
+  InvocationMode,
+  ResultRetention,
+  ClientResultVisibility,
+} from "./tools/metadata.js"
+export { modelAsTool } from "./tools/modelTool.js"
+export type { ModelToolOptions } from "./tools/modelTool.js"
 
 // ---------------------------------------------------------------------------
 // Sandbox primitives (the executors the tools are built on)

@@ -1,4 +1,5 @@
 import { runAgent } from "../agent.js"
+import { assembleContext, renderContext, type ContextProvider } from "../context/types.js"
 import { selectProvider } from "../providers/index.js"
 import { secretsToEnv } from "../secrets.js"
 import { primitiveTools, connectorTools, emissionTools } from "../tools/registry.js"
@@ -20,6 +21,12 @@ export interface NativeEngineOptions {
    * swap or extend that surface without subclassing the engine.
    */
   domainTools?: DomainToolFactory
+  /**
+   * Extra context sources asked for fragments at run time, appended after the
+   * spec's own pre-assembled `context`. Absent (the default) means the prompt is
+   * built from `spec.context` alone, exactly as before this seam existed.
+   */
+  contextProviders?: ContextProvider[]
 }
 
 /**
@@ -33,9 +40,11 @@ export class NativeEngine implements AgentEngine {
   readonly name = "native"
 
   private readonly domainTools: DomainToolFactory
+  private readonly contextProviders: ContextProvider[]
 
   constructor(options: NativeEngineOptions = {}) {
     this.domainTools = options.domainTools ?? emissionTools
+    this.contextProviders = options.contextProviders ?? []
   }
 
   supports(): EngineSupport {
@@ -76,7 +85,7 @@ export class NativeEngine implements AgentEngine {
       const text = await runAgent({
         provider,
         system: buildSystemPrompt(spec.workflow, spec.workspaceId, spec.workflowPath),
-        userPrompt: buildUserPrompt(spec.workflow, spec.context, spec.inputs),
+        userPrompt: buildUserPrompt(spec.workflow, await this.buildContext(spec, ctx), spec.inputs),
         tools,
         log: ctx.log,
         ...(spec.limits?.maxSteps !== undefined ? { maxSteps: spec.limits.maxSteps } : {}),
@@ -90,6 +99,25 @@ export class NativeEngine implements AgentEngine {
       // opened them) regardless of how run() exits.
       await connectors.close()
     }
+  }
+
+  /**
+   * The run's context text: the spec's own pre-assembled context, then whatever
+   * the configured providers contribute. With no providers this returns
+   * `spec.context` unchanged, so the prompt is byte-identical to a run that
+   * predates the seam.
+   */
+  private async buildContext(spec: RunSpec, ctx: EngineContext): Promise<string> {
+    if (this.contextProviders.length === 0) return spec.context
+
+    const fragments = await assembleContext(this.contextProviders, spec, ctx.log)
+    if (fragments.length === 0) return spec.context
+
+    ctx.log(
+      `context: ${fragments.length} fragment(s) from ${this.contextProviders.length} provider(s)`,
+    )
+    const assembled = renderContext(fragments)
+    return spec.context ? `${spec.context}\n\n${assembled}` : assembled
   }
 }
 
