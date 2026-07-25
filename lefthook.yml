@@ -1,0 +1,20 @@
+pre-commit:
+  parallel: true
+  commands:
+    prettier:
+      glob: "*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,json}"
+      run: npx prettier --check {staged_files}
+      fail_text: "Run 'npm run format' to fix formatting issues"
+    eslint:
+      glob: "*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+      run: npx eslint {staged_files}
+
+pre-push:
+  parallel: true
+  commands:
+    typecheck:
+      glob: "*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,json}"
+      run: npm run typecheck
+    test:
+      glob: "*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+      run: npm test

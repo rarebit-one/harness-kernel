@@ -1,0 +1,50 @@
+name: Test
+
+# Automated test gate: typecheck + lint + format check + Vitest on every
+# (non-draft) PR and on pushes to main.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    name: kernel (typecheck + Vitest)
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm test
+      # A library's deliverable is dist/ + its .d.ts rollup — build it in CI so a
+      # broken emit is caught here, not at publish time.
+      - run: npm run build
+      - name: Verify the type entrypoint exists and exports
+        run: |
+          if [ ! -f dist/index.d.ts ]; then
+            echo "::error::dist/index.d.ts is missing — the build emitted no types."
+            exit 1
+          fi
+          if ! grep -q '^export' dist/index.d.ts; then
+            echo "::error::dist/index.d.ts contains no exports — the public API is empty."
+            exit 1
+          fi
+      - name: Verify package contents
+        run: npm pack --dry-run
