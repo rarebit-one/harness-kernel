@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+*.tgz
+
+# Agent worktrees (workspace worktree-only workflow)
+.worktrees/
