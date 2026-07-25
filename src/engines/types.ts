@@ -48,12 +48,25 @@ export interface EngineContext {
   log: (line: string) => void
 }
 
+/**
+ * What an engine returns.
+ *
+ * NOTE — known residual coupling. `knowledge` and `issues` are shaped by one
+ * application's run protocol, which is not something a generic kernel should
+ * know. Now that capabilities and domain tools are injected, the application
+ * owns the sinks they write to and reads emissions from there; the in-process
+ * engines leave these empty. They survive only because the out-of-process
+ * engine (codex) still hands back what it read from the emissions file, and
+ * genericising that round trip is a wider change than the extraction it would
+ * have ridden along with. The intended end state is a single opaque
+ * `emissions?: unknown` the kernel never inspects.
+ */
 export interface EngineResult {
   /** Final assistant prose for the run; the caller writes it as the run artifact. */
   text: string
-  /** Knowledge the run asked to promote (e.g. via a promote_knowledge tool). */
+  /** See the note above: application-shaped, and empty from the in-process engines. */
   knowledge: KnowledgeEntry[]
-  /** Operational issues the run asked to open (e.g. via a record_issue tool). */
+  /** See the note above: application-shaped, and empty from the in-process engines. */
   issues: IssueEntry[]
 }
 

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { primitiveTools, emissionTools, connectorTools } from "./registry.js"
+import { primitiveTools, connectorTools } from "./registry.js"
 import type { McpConnection } from "../connectors/mcpClient.js"
 
 describe("primitiveTools", () => {
@@ -54,64 +54,6 @@ describe("primitiveTools", () => {
   it("filters by the permissions allowlist", () => {
     const names = primitiveTools(dir, {}, ["read_file"]).map((t) => t.spec.name)
     expect(names).toEqual(["read_file"])
-  })
-})
-
-describe("emissionTools", () => {
-  it("exposes exactly the domain-emission tools", () => {
-    expect(emissionTools().map((t) => t.spec.name)).toEqual(["promote_knowledge", "record_issue"])
-  })
-
-  it("records knowledge into the sink via promote_knowledge (and skips blank content)", async () => {
-    const sink: { content: string; title?: string; kind?: string }[] = []
-    const promote = emissionTools({ knowledge: sink }).find(
-      (t) => t.spec.name === "promote_knowledge",
-    )!
-
-    expect(
-      JSON.parse(await promote.execute({ content: "We prefer Queenstown.", title: "Prefs" })),
-    ).toEqual({ ok: true })
-    expect(sink).toEqual([{ content: "We prefer Queenstown.", title: "Prefs" }])
-
-    expect((JSON.parse(await promote.execute({ content: "" })) as { ok: boolean }).ok).toBe(false)
-    expect(sink).toHaveLength(1) // blank content not recorded
-  })
-
-  it("records issues into the sink via record_issue (and skips blank title)", async () => {
-    const sink: { title: string; body?: string; dedupe_key?: string; labels?: string[] }[] = []
-    const record = emissionTools({ issues: sink }).find((t) => t.spec.name === "record_issue")!
-
-    expect(
-      JSON.parse(
-        await record.execute({
-          title: "Renewal scan: 3 due",
-          body: "table…",
-          dedupe_key: "renewal-scan",
-          labels: ["renewals"],
-        }),
-      ),
-    ).toEqual({ ok: true })
-    expect(sink).toEqual([
-      {
-        title: "Renewal scan: 3 due",
-        body: "table…",
-        dedupe_key: "renewal-scan",
-        labels: ["renewals"],
-      },
-    ])
-
-    expect((JSON.parse(await record.execute({ title: "" })) as { ok: boolean }).ok).toBe(false)
-    expect(sink).toHaveLength(1) // blank title not recorded
-  })
-
-  it("tolerates an absent sink (the tool still reports ok)", async () => {
-    const promote = emissionTools().find((t) => t.spec.name === "promote_knowledge")!
-    expect(JSON.parse(await promote.execute({ content: "no sink here" }))).toEqual({ ok: true })
-  })
-
-  it("filters by the permissions allowlist, like the primitives", () => {
-    const names = emissionTools({}, ["record_issue"]).map((t) => t.spec.name)
-    expect(names).toEqual(["record_issue"])
   })
 })
 

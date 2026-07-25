@@ -1,32 +1,29 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { z } from "zod"
-import type { IssueEntry, KnowledgeEntry } from "../types.js"
 
 /**
- * The standing, workspace-scoped authority the kernel grants an in-run agent —
- * uniformly, regardless of engine. It is bound to exactly ONE run: that run's
- * workspace id, its sandbox working tree, and the per-run sinks. The sinks ride
- * back to the caller in the engine's result, over whatever trusted, per-run
- * channel the caller owns, and are applied there — honoring any approval gate
- * the workflow declares.
+ * The standing, workspace-scoped authority an engine grants an in-run agent,
+ * uniformly regardless of engine. It is bound to exactly ONE run: that run's
+ * workspace id and its sandbox working tree.
  *
  * The agent can NEVER name another workspace: the context is fixed at
  * construction and every capability defensively rejects a mismatching
- * `workspace_id`. And the surface is exactly three tools — it never grows to
- * expose a host application's privileged operations (running other workflows,
- * creating workspaces, changing membership, …). Those two invariants are the
- * security contract asserted by capability.test.ts.
+ * `workspace_id`. That invariant is enforced here, by {@link denyCrossWorkspace}
+ * and {@link resolveWithin}, and both are exported so an application building
+ * its own capabilities inherits exactly the same guarantees rather than
+ * reimplementing them slightly differently.
+ *
+ * The kernel defines only the capabilities that carry no product semantics
+ * (currently {@link writeFileCapability}). What an application emits — an
+ * issue, a piece of knowledge — is the application's vocabulary and lives
+ * there, injected into the engines through their capability-tool seams.
  */
 export interface CapabilityContext {
   /** The one workspace this authority is scoped to (the run's own). */
   workspaceId: string
   /** The run's sandbox working tree; write_file lands here → captured by the change set. */
   workdir: string
-  /** Issues the run opened; delivered via RunResult.issues[] → IssueRecorder. */
-  issues: IssueEntry[]
-  /** Knowledge the run promoted; delivered via RunResult.knowledge[] → KnowledgePromoter. */
-  knowledge: KnowledgeEntry[]
 }
 
 /** The uniform result of a capability call, JSON-encoded back to the agent. */
@@ -51,11 +48,7 @@ export interface CapabilityTool {
   handler(input: Record<string, unknown>): Promise<CapabilityResult>
 }
 
-/** The exact, fixed set of capability names — asserted by the security spec. */
-export const CAPABILITY_TOOL_NAMES = ["open_issue", "write_file", "promote_knowledge"] as const
-
 const str = (v: unknown): string => (typeof v === "string" ? v : "")
-const strArray = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : [])
 
 /**
  * Reject any call that names a workspace other than the one this authority is
@@ -64,7 +57,7 @@ const strArray = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : [
  * programmatic or adversarial caller trying to redirect an emit cross-workspace.
  * Returns an error result to short-circuit, or null when the call may proceed.
  */
-function denyCrossWorkspace(
+export function denyCrossWorkspace(
   input: Record<string, unknown>,
   workspaceId: string,
 ): CapabilityResult | null {
@@ -78,7 +71,7 @@ function denyCrossWorkspace(
 }
 
 /** Lexical guard: refuse a relative path that escapes the sandbox via `..` or is absolute. */
-function resolveWithin(dir: string, relPath: string): string {
+export function resolveWithin(dir: string, relPath: string): string {
   const base = path.resolve(dir)
   const target = path.resolve(base, relPath)
   if (target !== base && !target.startsWith(base + path.sep)) {
@@ -88,95 +81,42 @@ function resolveWithin(dir: string, relPath: string): string {
 }
 
 /**
- * Build the three capability tools bound to one run's {@link CapabilityContext}.
- * This is the single source of truth every engine shares; the MCP hosting
- * adapters (SDK for Claude Code, stdio for codex) are thin transports over it.
+ * The generic sandbox-write capability: put a UTF-8 file into THIS run's working
+ * tree. It stays in the kernel because it carries no product semantics — it
+ * touches only the workspace scope and the workdir, and the change is picked up
+ * by whatever diffs the tree afterwards. Nothing about it is specific to what a
+ * given application does with the result.
+ *
+ * Application-specific capabilities (emitting an issue, promoting knowledge)
+ * live in the application and are composed alongside this one — see
+ * `capabilityToolsFor` on the engines.
  */
-export function capabilityTools(ctx: CapabilityContext): CapabilityTool[] {
-  return [
-    {
-      name: "open_issue",
-      description:
-        "Open a workspace issue — the 'a human should look at this' surface (a decision sheet, a " +
-        "finding, a chase item). Filed after the run completes, in THIS run's workspace only. Pass a " +
-        "stable `dedupe_key` so a re-run UPDATES the same issue instead of opening a duplicate.",
-      schema: {
-        title: z.string().describe("Short issue title."),
-        body: z.string().optional().describe("Issue body (markdown)."),
-        dedupe_key: z
-          .string()
-          .optional()
-          .describe("Stable key so re-runs upsert one rolling issue rather than duplicating."),
-        labels: z.array(z.string()).optional().describe("Optional labels."),
-      },
-      // eslint-disable-next-line @typescript-eslint/require-await -- async by tool contract; resolves synchronously
-      handler: async (input) => {
-        const denied = denyCrossWorkspace(input, ctx.workspaceId)
-        if (denied) return denied
-        const title = str(input.title)
-        if (!title) return { ok: false, error: "title is required" }
-        const entry: IssueEntry = { title }
-        if (str(input.body)) entry.body = str(input.body)
-        if (str(input.dedupe_key)) entry.dedupe_key = str(input.dedupe_key)
-        const labels = strArray(input.labels)
-        if (labels.length > 0) entry.labels = labels
-        ctx.issues.push(entry)
-        return { ok: true }
-      },
+export function writeFileCapability(ctx: CapabilityContext): CapabilityTool {
+  return {
+    name: "write_file",
+    description:
+      "Write a UTF-8 file into THIS run's workspace sandbox (creating parent directories). The " +
+      "change is captured in the run's change set and committed to the workspace after the run, " +
+      "honoring the approval gate. Paths are relative to the workspace root; escaping it is refused.",
+    schema: {
+      path: z.string().describe("Workspace-relative file path."),
+      content: z.string().describe("UTF-8 file content."),
     },
-    {
-      name: "write_file",
-      description:
-        "Write a UTF-8 file into THIS run's workspace sandbox (creating parent directories). The " +
-        "change is captured in the run's change set and committed to the workspace after the run, " +
-        "honoring the approval gate. Paths are relative to the workspace root; escaping it is refused.",
-      schema: {
-        path: z.string().describe("Workspace-relative file path."),
-        content: z.string().describe("UTF-8 file content."),
-      },
-      handler: async (input) => {
-        const denied = denyCrossWorkspace(input, ctx.workspaceId)
-        if (denied) return denied
-        const rel = str(input.path)
-        if (!rel) return { ok: false, error: "path is required" }
-        if (typeof input.content !== "string") return { ok: false, error: "content is required" }
-        let target: string
-        try {
-          target = resolveWithin(ctx.workdir, rel)
-        } catch (err) {
-          return { ok: false, error: err instanceof Error ? err.message : String(err) }
-        }
-        await mkdir(path.dirname(target), { recursive: true })
-        await writeFile(target, input.content)
-        return { ok: true }
-      },
+    handler: async (input) => {
+      const denied = denyCrossWorkspace(input, ctx.workspaceId)
+      if (denied) return denied
+      const rel = str(input.path)
+      if (!rel) return { ok: false, error: "path is required" }
+      if (typeof input.content !== "string") return { ok: false, error: "content is required" }
+      let target: string
+      try {
+        target = resolveWithin(ctx.workdir, rel)
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+      await mkdir(path.dirname(target), { recursive: true })
+      await writeFile(target, input.content)
+      return { ok: true }
     },
-    {
-      name: "promote_knowledge",
-      description:
-        "Record a durable piece of workspace knowledge/memory learned during this run (a preference, " +
-        "decision, fact, or reusable summary), promoted into THIS run's workspace after it completes " +
-        "(held for approval if the workflow requires it). Use sparingly, for genuinely reusable knowledge.",
-      schema: {
-        content: z.string().describe("The knowledge to record (markdown)."),
-        title: z.string().optional().describe("Optional short title."),
-        kind: z
-          .string()
-          .optional()
-          .describe("Optional kind, e.g. 'memory' (default) or 'decision'."),
-      },
-      // eslint-disable-next-line @typescript-eslint/require-await -- async by tool contract; resolves synchronously
-      handler: async (input) => {
-        const denied = denyCrossWorkspace(input, ctx.workspaceId)
-        if (denied) return denied
-        const content = str(input.content)
-        if (!content) return { ok: false, error: "content is required" }
-        const entry: KnowledgeEntry = { content }
-        if (str(input.title)) entry.title = str(input.title)
-        if (str(input.kind)) entry.kind = str(input.kind)
-        ctx.knowledge.push(entry)
-        return { ok: true }
-      },
-    },
-  ]
+  }
 }

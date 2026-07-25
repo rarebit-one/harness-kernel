@@ -1,7 +1,7 @@
 import type { ConnectorConfig, IssueEntry, KnowledgeEntry } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { defaultClaudeCodeDriver } from "./claudeCodeDriver.js"
-import { capabilityTools, type CapabilityTool } from "./capability.js"
+import { writeFileCapability, type CapabilityContext, type CapabilityTool } from "./capability.js"
 
 /**
  * Driver-neutral options the engine derives from a {@link RunSpec} and hands to
@@ -21,8 +21,8 @@ export interface ClaudeCodeOptions {
   allowedTools?: string[]
   /** Wall-clock budget in ms; undefined means no engine-imposed limit. */
   maxDurationMs?: number
-  /** Runner-hosted, workspace-scoped capabilities (open_issue/write_file/promote_knowledge)
-   *  the driver mounts as an in-process MCP server so this engine can emit like native. */
+  /** Workspace-scoped capabilities the driver mounts as an in-process MCP server.
+   *  Which ones is the application's choice — see {@link CapabilityToolFactory}. */
   mcpTools?: CapabilityTool[]
   /** The run's external MCP connectors; the driver mounts them as SDK mcpServers so
    *  they become tools inside Claude Code (parity with the native engine). */
@@ -44,6 +44,18 @@ const DEFAULT_MODEL = "claude-opus-4-8"
 const LOG_TRUNCATE = 2000
 
 /**
+ * Builds the capability surface a run gets, bound to that run's workspace scope
+ * and working tree. The kernel supplies only the generic
+ * {@link writeFileCapability}; an application injects a factory that composes
+ * its own capabilities alongside it, closing over whatever sinks it wants the
+ * emissions to land in.
+ */
+export type CapabilityToolFactory = (ctx: CapabilityContext) => CapabilityTool[]
+
+/** The kernel's default surface: the one capability that carries no product semantics. */
+export const defaultCapabilityTools: CapabilityToolFactory = (ctx) => [writeFileCapability(ctx)]
+
+/**
  * Drives a run with the Claude Code harness (its own grep/glob/edit/bash tools +
  * tuned loop) against the sandbox working tree. File edits land on disk and are
  * captured by the caller's change-set diff — the engine returns prose only.
@@ -58,9 +70,14 @@ export class ClaudeCodeEngine implements AgentEngine {
   readonly name = "claude-code"
 
   private readonly drive: ClaudeCodeDriver
+  private readonly capabilityTools: CapabilityToolFactory
 
-  constructor(drive: ClaudeCodeDriver = defaultClaudeCodeDriver) {
+  constructor(
+    drive: ClaudeCodeDriver = defaultClaudeCodeDriver,
+    capabilityTools: CapabilityToolFactory = defaultCapabilityTools,
+  ) {
     this.drive = drive
+    this.capabilityTools = capabilityTools
   }
 
   supports(spec: RunSpec): EngineSupport {
@@ -88,16 +105,15 @@ export class ClaudeCodeEngine implements AgentEngine {
         ? spec.permissions.tools
         : undefined
 
-    // The capability handlers write into these sinks (via the runner-hosted MCP
-    // server the driver mounts); we return them so the caller routes issues
-    // and knowledge exactly as it does for the native engine — engine parity for emit.
+    // Injected capabilities close over sinks the APPLICATION owns, so it reads
+    // what a run emitted from those directly. These fields stay empty and remain
+    // only because EngineResult still declares them — see the note in
+    // engines/types.ts about that residual coupling.
     const knowledge: KnowledgeEntry[] = []
     const issues: IssueEntry[] = []
-    const mcpTools = capabilityTools({
+    const mcpTools = this.capabilityTools({
       workspaceId: spec.workspaceId,
       workdir: spec.workdir,
-      issues,
-      knowledge,
     })
 
     const options: ClaudeCodeOptions = {

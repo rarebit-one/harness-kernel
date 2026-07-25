@@ -108,8 +108,8 @@ export type { RunAgentOptions } from "./agent.js"
 // Extension point 6 — tools: generic primitives, injectable domain emissions,
 // MCP connectors, rich metadata + projections, and models-as-tools
 // ---------------------------------------------------------------------------
-export { primitiveTools, emissionTools, connectorTools, executeTool } from "./tools/registry.js"
-export type { Tool, ToolOutput, EmissionSinks } from "./tools/registry.js"
+export { primitiveTools, connectorTools, executeTool } from "./tools/registry.js"
+export type { Tool, ToolOutput } from "./tools/registry.js"
 export {
   selectTools,
   isToolVisible,
@@ -148,6 +148,7 @@ export type { McpConnection } from "./connectors/mcpClient.js"
 // Engines — the pluggable-harness seam
 // ---------------------------------------------------------------------------
 export { selectEngine } from "./engines/index.js"
+export type { EngineSelection } from "./engines/index.js"
 export type {
   AgentEngine,
   EngineContext,
@@ -162,10 +163,27 @@ export type { ClaudeCodeOptions, ClaudeCodeDriver } from "./engines/claudeCode.j
 export { CodexEngine } from "./engines/codex.js"
 export type { CodexOptions, CodexDriver } from "./engines/codex.js"
 
-// The capability surface every engine shares (open_issue / write_file /
-// promote_knowledge), plus the emissions file an out-of-process engine reads back.
-export { capabilityTools, CAPABILITY_TOOL_NAMES } from "./engines/capability.js"
+// The capability mechanism. The kernel supplies the workspace-scope guards, the
+// one capability with no product semantics (write_file), and the two transports
+// that expose a surface to an external engine. WHICH capabilities a run gets is
+// the application's decision, injected via the seams above.
+export { writeFileCapability, denyCrossWorkspace, resolveWithin } from "./engines/capability.js"
 export type { CapabilityContext, CapabilityResult, CapabilityTool } from "./engines/capability.js"
+export { defaultCapabilityTools } from "./engines/claudeCode.js"
+export type { CapabilityToolFactory } from "./engines/claudeCode.js"
+export {
+  capabilitySdkServer,
+  capabilityToolIds,
+  CAPABILITY_SERVER_NAME,
+} from "./engines/capabilityMcp.js"
+export {
+  buildCapabilityStdioServer,
+  serveCapability,
+  capabilityStdioConfigFromEnv,
+} from "./engines/capabilityStdio.js"
+export type { CapabilityStdioOptions, CapabilityStdioConfig } from "./engines/capabilityStdio.js"
+// The emissions file: the generic seam for getting state back out of an
+// out-of-process engine, which cannot share memory with the run that spawned it.
 export { emptyEmissions, readEmissions, writeEmissions } from "./engines/capabilityEmissions.js"
 export type { Emissions } from "./engines/capabilityEmissions.js"
 
