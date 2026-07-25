@@ -1,6 +1,6 @@
 {
   "name": "@rarebit-one/harness-kernel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Provider-neutral AI-harness kernel — LLM adapters, tool-use loop, MCP connectors, and a pluggable agent-engine seam",
   "license": "MIT",
   "type": "module",
@@ -45,7 +45,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && lefthook install || true",
+    "prepare": "npm run build && { git rev-parse --git-dir > /dev/null 2>&1 && lefthook install || true; }",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

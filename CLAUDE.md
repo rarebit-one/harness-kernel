@@ -108,6 +108,30 @@ Don't add tests that require a live provider key.
 - **Public API discipline.** A new export is a compatibility commitment. Add it
   to `src/index.ts` deliberately, not incidentally.
 
+## How consumers install it (while npm publishing is dormant)
+
+Nothing is on npm yet, so consumers take a **pinned git dependency**:
+
+```jsonc
+"@rarebit-one/harness-kernel": "github:rarebit-one/harness-kernel#v0.2.0"
+```
+
+That works because `prepare` runs `npm run build` — npm executes `prepare` when a
+package is installed from git, with devDependencies present, so `tsc` produces
+`dist/` on the consumer's machine. **Don't remove the build from `prepare`**: a
+git install would then resolve to a package whose `main`/`types` point at a
+`dist/` that doesn't exist, and the consumer fails with a confusing module-not-
+found rather than anything that names the real cause.
+
+Pin to a **tag**, not a branch, so a consumer's build can't change under it.
+Cut a tag per release: bump `version` here, merge, then tag the merge commit
+`v<version>`.
+
+Because the repo is private, CI in a consumer repo needs a credential that can
+read it — in this org, a short-lived installation token from the release-bot
+GitHub App plus `git config url.insteadOf`. Local development needs nothing
+extra; the developer's own git credentials resolve it.
+
 ## Publishing (dormant)
 
 The repo is **private** and **nothing has been published**. `publish.yml` is
