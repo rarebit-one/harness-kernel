@@ -1,0 +1,106 @@
+name: Publish
+
+# DORMANT until the public flip. The kernel is built OSS-ready (MIT + npmjs OIDC
+# trusted publishing wired) but the repo is private and nothing has been
+# published. This workflow only fires on a GitHub Release, and no Release exists
+# — so it stays inert until someone deliberately cuts the first one after the
+# repo goes public. It needs NO npm token: publishing authenticates via OIDC
+# (npm >= 11.5.1 + a trusted publisher configured on npmjs for this repo).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Run without publishing"
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build package
+        run: npm run build
+
+      - name: Verify d.ts entry exports types
+        run: |
+          if [ ! -f dist/index.d.ts ]; then
+            echo "::error::dist/index.d.ts is missing — the build emitted no types."
+            exit 1
+          fi
+          if ! grep -q '^export' dist/index.d.ts; then
+            echo "::error::dist/index.d.ts contains no exports — the public API is empty."
+            exit 1
+          fi
+          DTS_LINES=$(wc -l < dist/index.d.ts)
+          echo "::notice::dist/index.d.ts has $DTS_LINES lines of exports"
+
+      - name: Verify package contents
+        run: npm pack --dry-run
+
+      - name: Check version consistency
+        if: github.event_name == 'release'
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "Version $PKG_VERSION is consistent"
+
+      - name: Pack tarball
+        run: |
+          npm pack --ignore-scripts 2>/dev/null
+          TARBALL=$(ls *.tgz)
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        continue-on-error: true
+        with:
+          subject-path: ${{ env.TARBALL }}
+
+      - name: Publish package
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry-run }}" = "true" ]; then
+            echo "::notice::Dry run — skipping publish"
+            npm publish --dry-run
+          else
+            echo "::notice::Publishing ${{ env.TARBALL }} via OIDC trusted publishing"
+            npm publish
+          fi

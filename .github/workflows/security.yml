@@ -1,0 +1,38 @@
+name: Security
+
+# Supply-chain scanning for the kernel's dependency tree. Kept separate from the
+# Test workflow so the two concerns stay independently readable and re-runnable.
+# Advisory on day one so a pre-existing transitive advisory doesn't wedge the
+# gate (see step comment).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    name: npm audit (kernel dependencies)
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      # npm audit resolves advisories straight from package-lock.json — no install
+      # (npm ci / node_modules) needed, so we skip it.
+      # Advisory only for now: surfaced as a neutral non-blocking outcome via
+      # continue-on-error (clearer in the checks UI than `|| true`, which always
+      # reads green). Flip to blocking / tighten --audit-level once the tree is clean.
+      - name: npm audit
+        continue-on-error: true
+        run: npm audit --audit-level=high

@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # Kernel npm dependencies (repo root).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # Collapse routine minor/patch bumps into a single PR to cut review noise;
+    # major bumps still come as individual PRs.
+    groups:
+      minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Every published typescript-eslint — including canary — peers on
+      # `typescript: ">=4.8.4 <6.1.0"`, so a TypeScript major bump opens red on
+      # ERESOLVE. Lift once a typescript-eslint major admits it.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+
+  # GitHub Actions used by the workflows in .github/workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions-all:
+        update-types: [minor, patch]

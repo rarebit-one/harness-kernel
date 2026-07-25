@@ -1,0 +1,15 @@
+node_modules
+dist
+coverage
+package-lock.json
+
+# Non-code files
+*.md
+*.yml
+*.yaml
+
+# Agent instruction files
+.claude/
+
+# Worktrees (workspace worktree-only workflow)
+.worktrees/
