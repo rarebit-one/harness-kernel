@@ -1,4 +1,8 @@
-node_modules/
+# No trailing slash — `node_modules/` matches directories only, which is how an
+# absolute symlink named `node_modules` got committed (see git history for the
+# tracked 120000 entry). Without the slash this ignores the directory AND any
+# symlink of the same name.
+node_modules
 dist/
 coverage/
 .env
