@@ -26,4 +26,6 @@ jobs:
       issues: write
       id-token: write
     uses: rarebit-one/.github/.github/workflows/claude-code-review.yml@main
+    with:
+      runner-label: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     secrets: inherit

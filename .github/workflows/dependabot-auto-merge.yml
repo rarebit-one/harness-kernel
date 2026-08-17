@@ -23,4 +23,6 @@ jobs:
       contents: write
       pull-requests: write
     uses: rarebit-one/.github/.github/workflows/dependabot-auto-merge.yml@main
+    with:
+      runner-label: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     secrets: inherit
