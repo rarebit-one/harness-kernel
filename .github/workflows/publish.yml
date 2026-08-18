@@ -6,6 +6,13 @@ name: Publish
 # — so it stays inert until someone deliberately cuts the first one after the
 # repo goes public. It needs NO npm token: publishing authenticates via OIDC
 # (npm >= 11.5.1 + a trusted publisher configured on npmjs for this repo).
+#
+# Runner routing: runs on the self-hosted homelab via `vars.RUNNER_LABEL`,
+# matching test.yml and security.yml. The `|| 'ubuntu-latest'` fallback is
+# load-bearing, not decoration: on the long-lived-runner path a job whose label
+# resolves to no agent queues FOREVER with nothing red — for a publish that
+# means a cut release silently never reaches npm. With the fallback a fleet
+# outage degrades to a slower hosted run instead of a silent stall.
 on:
   release:
     types: [published]
@@ -19,7 +26,7 @@ on:
 jobs:
   publish:
     name: Publish to npm
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
     environment: npm
     permissions:
@@ -53,8 +60,23 @@ jobs:
           package-manager-cache: ${{ runner.environment == 'github-hosted' }}
           registry-url: "https://registry.npmjs.org"
 
+      # `npm install -g` is safe on the self-hosted runner: setup-node puts node
+      # under the runner's own _work/_tool prefix (runner-owned, no sudo, not
+      # /usr/local/bin). But that prefix PERSISTS between runs on a long-lived
+      # agent, so the upgrade is guarded to be a no-op once satisfied rather
+      # than re-mutating the shared tool cache on every publish. Behaviour on a
+      # GitHub-hosted runner is unchanged (npm there is always older).
       - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
-        run: npm install -g npm@latest
+        run: |
+          set -euo pipefail
+          have="$(npm --version)"
+          if printf '%s\n%s\n' "11.5.1" "$have" | sort -V -C; then
+            echo "npm $have already satisfies >= 11.5.1 — leaving it alone"
+          else
+            echo "npm $have is older than 11.5.1 — upgrading"
+            npm install -g npm@latest
+            echo "npm is now $(npm --version)"
+          fi
 
       - name: Install dependencies
         run: npm ci
