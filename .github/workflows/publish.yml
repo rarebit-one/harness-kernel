@@ -35,7 +35,22 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-          cache: "npm"
+          # This job is pinned to `ubuntu-latest`, so today this expression
+          # always evaluates to 'npm' and the behaviour is UNCHANGED. It is
+          # written conditionally to pre-empt the open PR routing Publish to the
+          # homelab: the moment `runs-on` becomes `vars.RUNNER_LABEL`, restoring
+          # the 735 MB npm cache over a ~25 Mbit link would add ~200s to the
+          # release path for content that already sits in that host's ~/.npm.
+          # See test.yml for the measurement.
+          cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
+          # An empty `cache` alone is NOT enough. setup-node v7 falls through to
+          # `package-manager-cache` (default TRUE), which auto-enables npm caching
+          # whenever package.json declares `packageManager` or
+          # `devEngines.packageManager` (src/main.ts L72-90, and the input's own
+          # description). No package.json here declares either today -- checked --
+          # so gating only `cache` would work by luck and would silently start
+          # caching again the day anyone or Dependabot adds that field. Gate both.
+          package-manager-cache: ${{ runner.environment == 'github-hosted' }}
           registry-url: "https://registry.npmjs.org"
 
       - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)

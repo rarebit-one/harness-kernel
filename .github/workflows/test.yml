@@ -26,7 +26,29 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-          cache: npm
+          # Remote npm caching is worth it ONLY on an ephemeral GitHub-hosted
+          # runner. On the long-lived self-hosted homelab runner ~/.npm already
+          # persists between jobs, so `npm ci` there costs ~5s from local disk
+          # while restoring the 735 MB cache archive over a ~25 Mbit home link
+          # cost 170-219s (measured, runs 32088555041 / 32089299905 /
+          # 32091025735) plus ~30s to re-upload it. That is a 4x regression paid
+          # to save 9s.
+          #
+          # An empty `cache` input disables caching outright: setup-node v7 only
+          # restores when the input is truthy, and its post-step saves only when
+          # the restore ran (src/main.ts `if (cache)`, src/cache-save.ts gates on
+          # the saved state). The `else if (packagemanagercache)` auto-detect
+          # branch needs a `packageManager` field in package.json, which this
+          # repo does not have.
+          cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
+          # An empty `cache` alone is NOT enough. setup-node v7 falls through to
+          # `package-manager-cache` (default TRUE), which auto-enables npm caching
+          # whenever package.json declares `packageManager` or
+          # `devEngines.packageManager` (src/main.ts L72-90, and the input's own
+          # description). No package.json here declares either today -- checked --
+          # so gating only `cache` would work by luck and would silently start
+          # caching again the day anyone or Dependabot adds that field. Gate both.
+          package-manager-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run typecheck
