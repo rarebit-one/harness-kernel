@@ -41,6 +41,7 @@ ESM-only, Node >= 22.
 | **Model seam** | `ModelInvocation` — one arrow for every model kind, with declared capabilities, a uniform result envelope and `probe()` |
 | **Providers** | `Provider` interface + `selectProvider()` over Anthropic, OpenAI, OpenRouter, and an offline `mock`; `chatModel()` puts any of them on the seam |
 | **Agent loop** | `runAgent()` — a provider-neutral tool-use loop with step and wall-clock budgets |
+| **Run events** | `RunEvent` — an ordered, structured account of a run (turns, tool calls, budgets, outcome), emitted to an optional sink |
 | **Tools** | `Tool`, `primitiveTools()` (`run_code`, `read_file`, `list_files`, `http_fetch`), `connectorTools()`, `modelAsTool()`, metadata + projections |
 | **Connectors** | `connectMcp()` — MCP clients over stdio / streamable HTTP / SSE |
 | **Engines** | The `AgentEngine` seam + `native`, `claude-code`, and `codex` harnesses, plus the capability *mechanism* (scope guards, a generic `write_file`, and MCP/stdio transports) — the capability *set* is yours to inject |
@@ -115,6 +116,53 @@ without the loop, the engines, or any kernel code learning perception exists.
 Capabilities are **checked, not assumed**: asking a model to stream when it
 declared `streaming: false` throws a `CapabilityError` instead of quietly
 returning a buffered response.
+
+### Run events
+
+`log` is prose for a human. The event stream is the same run, machine-readable:
+
+```ts
+import { runAgent, recordRunEvents } from "@rarebit-one/harness-kernel"
+
+const { sink, events } = recordRunEvents()
+await runAgent({ provider, system, userPrompt, tools, emit: sink })
+// events: run.started -> model.turn -> tool.called -> tool.succeeded -> ... -> run.finished
+```
+
+Engines take the same sink through `EngineContext`:
+
+```ts
+await engine.run(spec, { log, emit: sink })
+```
+
+Both are **optional** — omit them and the loop behaves exactly as it did before
+events existed. Every event carries a monotonic `seq` from a single per-run
+counter, so a gap is detectable: a dropped event must never look like an event
+that never happened. A sink that throws is reported through `log` and skipped,
+never allowed to fail the run.
+
+A sink is an observer and can never be a participant: `tool.called.input` is a
+detached copy, so a sink that redacts in place cannot change what the tool
+receives. The flip side is a disclosure surface worth knowing about — that field
+carries the **raw tool arguments**, so any secret or PII a model passed as an
+argument now reaches every attached sink. Nothing outside the model conversation
+captured these before; a sink that persists or forwards events should redact.
+
+`run.finished` is always the last event, including when the loop throws — the
+error propagates unchanged, but `outcome: "failed"` closes the stream first, so
+a crashed run is never mistaken for one still in flight.
+
+**The kernel emits this stream; it does not store it.** Resume, fork, search and
+replay all want persistence and a schema — infrastructure a kernel must not
+ship. `recordRunEvents()` is an in-memory recorder for tests and the reference
+shape for a real store, not a session store itself.
+
+`tool.succeeded` carries the tool's own `reversible` / `undoToolName` /
+`undoWindowSeconds` from `ToolMetadata`, copied at call time. That is the
+missing half of a bargain the metadata already made: it could declare a tool
+undoable but nothing recorded that the tool *ran*, so an application had nothing
+concrete to undo. Deciding whether to undo remains policy, and stays in the
+application.
 
 ## Usage
 

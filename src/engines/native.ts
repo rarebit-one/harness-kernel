@@ -83,6 +83,7 @@ export class NativeEngine implements AgentEngine {
         userPrompt: buildUserPrompt(spec.workflow, await this.buildContext(spec, ctx), spec.inputs),
         tools,
         log: ctx.log,
+        ...(ctx.emit ? { emit: ctx.emit } : {}),
         ...(spec.limits?.maxSteps !== undefined ? { maxSteps: spec.limits.maxSteps } : {}),
         ...(spec.limits?.maxDurationMs !== undefined
           ? { maxDurationMs: spec.limits.maxDurationMs }

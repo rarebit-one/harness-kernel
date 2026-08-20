@@ -1,3 +1,4 @@
+import type { RunEventSink } from "../events.js"
 import type { ProviderSelection } from "../providers/index.js"
 import type {
   ConnectorConfig,
@@ -46,6 +47,21 @@ export interface RunSpec {
 export interface EngineContext {
   /** Append a timestamped line to the run's logs. */
   log: (line: string) => void
+  /**
+   * Optional structured event sink for the run.
+   *
+   * `log` is prose for a human; this is the machine-readable account of the
+   * same run. Optional so every existing caller and every existing engine
+   * compiles and behaves unchanged — an engine that has nothing structured to
+   * say simply never calls it, and a caller that wants only logs omits it.
+   *
+   * Engines differ in what they can honour, and that is expected rather than a
+   * gap to close: the in-process loop emits the full stream because it sees
+   * every turn and every tool call, whereas an out-of-process engine only sees
+   * what its transport surfaces. An engine emitting a subset is not degrading
+   * silently — the events it does emit are exact.
+   */
+  emit?: RunEventSink
 }
 
 /**
