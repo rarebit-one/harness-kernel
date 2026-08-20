@@ -151,14 +151,22 @@ export interface RunBudgetExhaustedEvent extends RunEventBase {
   step: number
 }
 
-/** The run is over. Always the last event, whatever the outcome — including
- *  when the loop throws, in which case it is emitted before the error
- *  propagates. */
+/**
+ * The run is over. Always the last event, whatever the outcome — including when
+ * the loop throws, in which case it is emitted before the error propagates.
+ *
+ * `steps` and `text` are optional because on the failure path they are genuinely
+ * unknown: the loop threw and never returned a result, so any number here would
+ * be **invented**. They are omitted rather than zeroed — a wrong number is worse
+ * than an absent one, and the `model.turn` events already in the stream are the
+ * authoritative record of how far the run got. On every other outcome both are
+ * present.
+ */
 export interface RunFinishedEvent extends RunEventBase {
   type: "run.finished"
   outcome: RunOutcome
-  steps: number
-  text: string
+  steps?: number
+  text?: string
   /** Present only when `outcome` is `failed`. */
   error?: string
 }
@@ -187,7 +195,27 @@ export type RunEventInput =
   | Omit<RunBudgetExhaustedEvent, keyof RunEventBase>
   | Omit<RunFinishedEvent, keyof RunEventBase>
 
+/**
+ * The events a {@link Loop} may emit: everything except the bookends.
+ *
+ * `run.started` and `run.finished` belong to `runWithEvents`, which brackets
+ * whichever loop runs. A loop that emitted its own would produce a duplicate
+ * start, or a premature terminal event that a consumer stops reading at — and
+ * a loop migrated from the older API, where loops DID own their stream, is
+ * exactly the code that would try. Excluding them from the type means that
+ * migration fails to compile instead of producing a subtly wrong stream.
+ */
+export type LoopEventInput = Exclude<
+  RunEventInput,
+  { type: "run.started" } | { type: "run.finished" }
+>
+
 /** Stamps `seq`/`at` and delivers to a sink, isolating sink failures. */
+export interface LoopEventEmitter {
+  emit(event: LoopEventInput): void
+  readonly count: number
+}
+
 export interface RunEventEmitter {
   emit(event: RunEventInput): void
   /** How many events have been stamped. Lets a caller close a run with the
