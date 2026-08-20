@@ -7,7 +7,7 @@ name: Publish
 # repo goes public. It needs NO npm token: publishing authenticates via OIDC
 # (npm >= 11.5.1 + a trusted publisher configured on npmjs for this repo).
 #
-# Runner routing: runs on the self-hosted homelab via `vars.RUNNER_LABEL`,
+# Runner routing: runs on the self-hosted homelab via `vars.RUNNER_LABEL_BROKER || vars.RUNNER_LABEL`,
 # matching test.yml and security.yml. The `|| 'ubuntu-latest'` fallback is
 # load-bearing, not decoration: on the long-lived-runner path a job whose label
 # resolves to no agent queues FOREVER with nothing red — for a publish that
@@ -26,7 +26,7 @@ on:
 jobs:
   publish:
     name: Publish to npm
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER_LABEL_BROKER || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
     environment: npm
     permissions:
@@ -45,7 +45,7 @@ jobs:
           # This job is pinned to `ubuntu-latest`, so today this expression
           # always evaluates to 'npm' and the behaviour is UNCHANGED. It is
           # written conditionally to pre-empt the open PR routing Publish to the
-          # homelab: the moment `runs-on` becomes `vars.RUNNER_LABEL`, restoring
+          # homelab: the moment `runs-on` becomes `vars.RUNNER_LABEL_BROKER || vars.RUNNER_LABEL`, restoring
           # the 735 MB npm cache over a ~25 Mbit link would add ~200s to the
           # release path for content that already sits in that host's ~/.npm.
           # See test.yml for the measurement.
