@@ -1,4 +1,4 @@
-import type { ConnectorConfig, IssueEntry, KnowledgeEntry } from "../types.js"
+import type { ConnectorConfig } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { defaultClaudeCodeDriver } from "./claudeCodeDriver.js"
 import { writeFileCapability, type CapabilityContext, type CapabilityTool } from "./capability.js"
@@ -105,12 +105,9 @@ export class ClaudeCodeEngine implements AgentEngine {
         ? spec.permissions.tools
         : undefined
 
-    // Injected capabilities close over sinks the APPLICATION owns, so it reads
-    // what a run emitted from those directly. These fields stay empty and remain
-    // only because EngineResult still declares them — see the note in
-    // engines/types.ts about that residual coupling.
-    const knowledge: KnowledgeEntry[] = []
-    const issues: IssueEntry[] = []
+    // No emissions from here: injected capabilities close over sinks the
+    // APPLICATION owns, so it reads what a run emitted from those directly.
+    // Omitted rather than returned empty — see EngineResult.
     const mcpTools = this.capabilityTools({
       workspaceId: spec.workspaceId,
       workdir: spec.workdir,
@@ -142,7 +139,7 @@ export class ClaudeCodeEngine implements AgentEngine {
       }
     }
 
-    return { text: finalText || "(no output)", knowledge, issues }
+    return { text: finalText || "(no output)" }
   }
 }
 

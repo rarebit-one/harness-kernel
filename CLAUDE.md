@@ -25,7 +25,7 @@ around — the kernel never bends to a consumer.
 | Path | What it is |
 |------|------------|
 | `src/index.ts` | The public API. Anything not re-exported here is internal. |
-| `src/types.ts` | The five shared shapes callers hand in: `ConnectorConfig`, `Permissions`, `WorkflowDefinition`, `KnowledgeEntry`, `IssueEntry`. |
+| `src/types.ts` | The three shared shapes callers hand in: `ConnectorConfig`, `Permissions`, `WorkflowDefinition`. What a run EMITS is not here — it is opaque, see `EngineResult.emissions`. |
 | `src/models/` | The `ModelInvocation` seam (`types.ts`), the `chat` kind + `Provider` adapter (`chat.ts`), the kind registry (`registry.ts`), middleware (`middleware.ts`) |
 | `src/routing/` | `RouteResolver` + the built-in `StaticRouteResolver` (capabilities as code) |
 | `src/context/` | `ContextProvider` chain — `assembleContext` / `renderContext` |
@@ -132,6 +132,12 @@ Don't add tests that require a live provider key.
   either. Both properties exist
   because the loop is a seam now: anything that relies on a future implementor
   remembering to do it is not a property, it is a hope.
+- **The kernel names no emission.** `EngineResult.emissions` is `unknown` and is
+  never parsed, validated or defaulted here; `readEmissions` returns the JSON it
+  found, or `undefined` when there was none. If you find yourself adding a type
+  for *what a run produced*, that is this rule being broken — the kernel carried
+  `KnowledgeEntry`/`IssueEntry` for exactly that reason and they were one
+  product's vocabulary sitting in a kernel.
 - **Emit, never store.** The kernel produces the run event stream; it keeps
   none of it. A session store, resume, fork or replay needs persistence and a
   schema, which is the same infrastructure the "seams, not implementations" rule

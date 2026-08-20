@@ -129,8 +129,35 @@ describe("CodexEngine.run", () => {
       yield { kind: "result", text: "done", isError: false }
     }
     const result = await new CodexEngine(driver, SCRIPT).run(spec({}, workdir), recordingCtx())
-    expect(result.issues).toEqual([{ title: "found it" }])
-    expect(result.knowledge).toEqual([{ content: "note" }])
+    // Passed through verbatim — the kernel never looked inside it.
+    expect(result.emissions).toEqual({
+      issues: [{ title: "found it" }],
+      knowledge: [{ content: "note" }],
+    })
+  })
+
+  it("reports the emissions size from the FILE, in real bytes", async () => {
+    // Multi-byte on purpose: `JSON.stringify(x).length` counts UTF-16 code units
+    // and under-reports — the same mistake this repo already fixed once for tool
+    // output. The file's own size cannot be wrong about this.
+    const payload = { note: "\u{1F419}\u{1F419}" }
+    async function* driver(opts: CodexOptions): AsyncIterable<CodexMessage> {
+      const config = await readFile(path.join(opts.codexHome, "config.toml"), "utf8")
+      const emissionsFile = /"HARNESS_EMISSIONS_FILE" = "([^"]+)"/.exec(config)?.[1]
+      if (!emissionsFile) throw new Error("expected an emissions file in the capability server env")
+      const { writeFile } = await import("node:fs/promises")
+      await writeFile(emissionsFile, JSON.stringify(payload))
+      yield { kind: "result", text: "done", isError: false }
+    }
+
+    const ctx = recordingCtx()
+    const result = await new CodexEngine(driver, SCRIPT).run(spec({}, workdir), ctx)
+
+    expect(result.emissions).toEqual(payload)
+    const realBytes = Buffer.byteLength(JSON.stringify(payload), "utf8")
+    expect(ctx.logs.join("\n")).toContain(`present (${realBytes} bytes)`)
+    // The count the naive implementation would have logged instead.
+    expect(JSON.stringify(payload).length).not.toBe(realBytes)
   })
 
   it("returns a fallback when the harness produces no output", async () => {

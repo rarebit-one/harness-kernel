@@ -109,7 +109,7 @@ export class NativeEngine implements AgentEngine {
         // gets them without having to know they exist.
         { log: ctx.log, events: runEventEmitter(ctx.emit, ctx.log) },
       )
-      return { text: result.text, knowledge: [], issues: [] }
+      return { text: result.text }
     } finally {
       // Connectors are only needed during the loop; close them here (the engine
       // opened them) regardless of how run() exits.
