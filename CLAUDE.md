@@ -162,7 +162,7 @@ Nothing is on npm yet. Consumers take a **vendored tarball**, not a git or
 registry dependency:
 
 ```jsonc
-"@rarebit-one/harness-kernel": "file:vendor/harness-kernel-0.4.0.tgz"
+"@rarebit-one/harness-kernel": "file:vendor/harness-kernel-0.5.0.tgz"
 ```
 
 Produced here with `npm pack` and committed into the consumer's `vendor/`.
@@ -175,7 +175,11 @@ rationale lives in `jumpdrive-runner`'s `CLAUDE.md` under "Why a tarball and not
 a git dependency (settled — don't re-litigate)"; it is not restated here, because
 the consumer owns that decision.
 
-What this repo still owes them is a **truthful version**. Bump `version`, merge,
+What this repo still owes them is a **truthful version**. Bump with
+`npm version <v> --no-git-tag-version` — **never** a find-and-replace over
+`package-lock.json`, which will happily rewrite an unrelated dependency that
+happens to sit at the same number (caught doing exactly that to `type-check`
+while cutting 0.5.0). Then merge,
 then tag the merge commit `v<version>` — the tag is the record of what a given
 tarball contains. Landing features without bumping is how `v0.3.0`, `main`'s
 `0.3.0` and two vendored `0.3.0.tgz` files came to be four different code states
