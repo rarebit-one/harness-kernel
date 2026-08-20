@@ -144,27 +144,28 @@ Don't add tests that require a live provider key.
 
 ## How consumers install it (while npm publishing is dormant)
 
-Nothing is on npm yet, so consumers take a **pinned git dependency**:
+Nothing is on npm yet. Consumers take a **vendored tarball**, not a git or
+registry dependency:
 
 ```jsonc
-"@rarebit-one/harness-kernel": "github:rarebit-one/harness-kernel#v0.2.0"
+"@rarebit-one/harness-kernel": "file:vendor/harness-kernel-0.4.0.tgz"
 ```
 
-That works because `prepare` runs `npm run build` — npm executes `prepare` when a
-package is installed from git, with devDependencies present, so `tsc` produces
-`dist/` on the consumer's machine. **Don't remove the build from `prepare`**: a
-git install would then resolve to a package whose `main`/`types` point at a
-`dist/` that doesn't exist, and the consumer fails with a confusing module-not-
-found rather than anything that names the real cause.
+Produced here with `npm pack` and committed into the consumer's `vendor/`.
 
-Pin to a **tag**, not a branch, so a consumer's build can't change under it.
-Cut a tag per release: bump `version` here, merge, then tag the merge commit
-`v<version>`.
+**A `github:` pin was evaluated and rejected downstream — don't reintroduce it.**
+The reason is not credentials (the release-bot App is installed here and mints a
+token fine); it is that a consumer's production image builds without a `git`
+binary on purpose, and `npm ci` runs several times during that build. The full
+rationale lives in `jumpdrive-runner`'s `CLAUDE.md` under "Why a tarball and not
+a git dependency (settled — don't re-litigate)"; it is not restated here, because
+the consumer owns that decision.
 
-Because the repo is private, CI in a consumer repo needs a credential that can
-read it — in this org, a short-lived installation token from the release-bot
-GitHub App plus `git config url.insteadOf`. Local development needs nothing
-extra; the developer's own git credentials resolve it.
+What this repo still owes them is a **truthful version**. Bump `version`, merge,
+then tag the merge commit `v<version>` — the tag is the record of what a given
+tarball contains. Landing features without bumping is how `v0.3.0`, `main`'s
+`0.3.0` and two vendored `0.3.0.tgz` files came to be four different code states
+sharing one number.
 
 ## Publishing (dormant)
 
