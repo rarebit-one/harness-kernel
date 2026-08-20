@@ -30,18 +30,19 @@ around — the kernel never bends to a consumer.
 | `src/routing/` | `RouteResolver` + the built-in `StaticRouteResolver` (capabilities as code) |
 | `src/context/` | `ContextProvider` chain — `assembleContext` / `renderContext` |
 | `src/providers/` | `Provider` interface + anthropic / openai / openrouter / mock adapters, `selectProvider` |
-| `src/agent.ts` | `runAgent` — the tool-use loop, driven through the model seam |
+| `src/agent.ts` | `runNativeLoop` — the tool-use loop; `runAgent` is the option-bag adapter onto it, and `resolveLoopLimits` the one home for budget defaults |
+| `src/loop.ts` | The `Loop` seam + `nativeLoop` — the control loop as an extension point |
 | `src/events.ts` | `RunEvent` + `runEventEmitter` / `recordRunEvents` — the structured run stream the loop and `EngineContext` emit |
 | `src/tools/` | `Tool` + `primitiveTools` (generic) / `connectorTools`; `metadata.ts` (scoping + projections); `modelTool.ts` (a model surfaced as a tool). Domain tools are the application's, injected via `DomainToolFactory`. |
 | `src/primitives/` | Sandbox primitives: `codeExec`, `fs`, `http`, `download` |
 | `src/engines/` | The `AgentEngine` seam + native / claude-code / codex harnesses; the capability *mechanism* (guards, `write_file`, MCP + stdio transports) — never an application's capability set |
 | `src/secrets.ts` | `secretsToEnv` |
 
-## The six extension points
+## The seven extension points
 
 An application extends the kernel through these seams. It should never need to
-patch or fork kernel code to add a model kind, a route source, a context source
-or a tool.
+patch or fork kernel code to add a model kind, a route source, a context source,
+a tool, or a control loop.
 
 | # | Seam | Where | Kernel ships |
 |---|------|-------|--------------|
@@ -51,6 +52,7 @@ or a tool.
 | 4 | **Engines** | `AgentEngine` | native / claude-code / codex |
 | 5 | **Context providers** | `ContextProvider` | parallel assembly + rendering; wired into `NativeEngine` |
 | 6 | **Tools** | `Tool` + `ToolMetadata` | primitives, MCP connectors, projections, `modelAsTool`; domain tools + capabilities are injected |
+| 7 | **Loop** | `Loop` | `nativeLoop` — the one loop the kernel ships, which `runAgent` also runs |
 
 **Points 1 and 2 are different layers and must not be conflated.** A resolver
 answers "which model, prompt and tools should capability X use?" and hands back
@@ -117,6 +119,11 @@ Don't add tests that require a live provider key.
   The workspace-scope and path guards (`denyCrossWorkspace`, `resolveWithin`) are
   exported so application capabilities inherit identical security properties
   rather than reimplementing them slightly differently.
+- **One loop implementation, one code path.** `runAgent` and `nativeLoop` both
+  land in `runNativeLoop`; budget defaults live only in `resolveLoopLimits`. The
+  seam exists so an application can supply DIFFERENT control flow, never so the
+  kernel can carry two of its own — a second in-kernel loop is the tell that
+  this rule has been broken.
 - **Emit, never store.** The kernel produces the run event stream; it keeps
   none of it. A session store, resume, fork or replay needs persistence and a
   schema, which is the same infrastructure the "seams, not implementations" rule

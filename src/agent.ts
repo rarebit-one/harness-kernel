@@ -4,6 +4,7 @@ import {
   type RunOutcome,
   type ToolSucceededEvent,
 } from "./events.js"
+import type { LoopContext, LoopRequest, LoopResult } from "./loop.js"
 import { asChatModel, type ChatModel } from "./models/chat.js"
 import type { InvokeContext } from "./models/types.js"
 import type { AgentMessage, Provider, ToolResult } from "./providers/types.js"
@@ -47,6 +48,24 @@ function defaultMaxDurationMs(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : FALLBACK_MAX_DURATION_MS
 }
 const FALLBACK_MAX_TOOL_RESULT_BYTES = 64 * 1024
+
+/**
+ * Resolve a partial budget to the concrete numbers a {@link LoopRequest} needs.
+ *
+ * One place, deliberately. A {@link Loop} is handed numbers rather than
+ * optionals, so if each caller resolved its own defaults a second loop
+ * implementation could silently run to a different ceiling than the one the
+ * kernel ships. `runAgent` and `NativeEngine` both come here.
+ */
+export function resolveLoopLimits(limits?: {
+  maxSteps?: number | undefined
+  maxDurationMs?: number | undefined
+}): { maxSteps: number; maxDurationMs: number } {
+  return {
+    maxSteps: limits?.maxSteps ?? DEFAULT_MAX_STEPS,
+    maxDurationMs: limits?.maxDurationMs ?? defaultMaxDurationMs(),
+  }
+}
 
 /**
  * Cap on tool output fed back into the conversation, independent of the sandbox
@@ -106,17 +125,37 @@ function truncate(text: string, max = maxToolResultBytes()): string {
  * model orchestrates; deterministic work happens in the tools.
  */
 export async function runAgent(options: RunAgentOptions): Promise<string> {
-  const { provider, system, userPrompt, tools } = options
-  const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS
-  const maxDurationMs = options.maxDurationMs ?? defaultMaxDurationMs()
-  const log = options.log ?? (() => {})
-
   // A `Provider` is adapted onto the model seam; a `ChatModel` passes straight
-  // through. Either way the loop below talks to one interface, so a
+  // through. Either way the loop talks to one interface, so a
   // middleware-wrapped or registry-resolved model drives it identically.
-  const model = asChatModel(provider)
+  const result = await runNativeLoop(
+    {
+      model: asChatModel(options.provider),
+      system: options.system,
+      userPrompt: options.userPrompt,
+      tools: options.tools,
+      limits: resolveLoopLimits(options),
+    },
+    { log: options.log ?? (() => {}), ...(options.emit ? { emit: options.emit } : {}) },
+  )
+  return result.text
+}
+
+/**
+ * The native tool-use loop, as a {@link Loop}.
+ *
+ * Exported for `loop.ts` to wrap; applications reach it through `nativeLoop`
+ * rather than calling this directly. It is the whole of the kernel's control
+ * flow, and the only place any of it lives — `runAgent` and `nativeLoop` both
+ * come here, so the two cannot drift.
+ */
+export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Promise<LoopResult> {
+  const { model, system, userPrompt, tools } = req
+  const { maxSteps, maxDurationMs } = req.limits
+  const log = loopCtx.log
+
   const ctx: InvokeContext = { log, budget: { maxDurationMs } }
-  const events = runEventEmitter(options.emit, log)
+  const events = runEventEmitter(loopCtx.emit, log)
 
   const byName = new Map(tools.map((t) => [t.spec.name, t]))
   const specs = toToolSpecs(tools)
@@ -259,7 +298,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
     const accumulated = lastAssistantText || "(no output before time budget exhausted)"
     const text = `${accumulated}\n\n[run stopped: wall-clock budget of ${maxDurationMs}ms exceeded]`
     events.emit({ type: "run.finished", outcome: "timed_out", steps: stepsTaken, text })
-    return text
+    return { text, steps: stepsTaken, outcome: "timed_out" }
   }
 
   // Hit the step budget mid-tool-use: ask once more with no tools so the model
@@ -286,5 +325,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
   // to know about the trustworthiness of the answer.
   const outcome: RunOutcome = timedOut ? "timed_out" : exhausted ? "steps_exhausted" : "completed"
   events.emit({ type: "run.finished", outcome, steps: stepsTaken, text })
-  return text
+  // The return value and the terminal event are two views of one run, built
+  // from the same three values so they cannot disagree.
+  return { text, steps: stepsTaken, outcome }
 }

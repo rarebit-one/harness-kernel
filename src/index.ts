@@ -101,8 +101,14 @@ export type { ContextProvider, ContextFragment, ContextSpec } from "./context/ty
 // ---------------------------------------------------------------------------
 // The tool-use loop
 // ---------------------------------------------------------------------------
-export { runAgent, maxToolResultBytes } from "./agent.js"
+export { runAgent, maxToolResultBytes, resolveLoopLimits } from "./agent.js"
 export type { RunAgentOptions } from "./agent.js"
+
+// Extension point 7 — the control loop itself. The kernel ships exactly one
+// (`nativeLoop`, the loop `runAgent` has always run); this is the interface
+// around it, so an application can change control flow without forking.
+export { nativeLoop } from "./loop.js"
+export type { Loop, LoopRequest, LoopContext, LoopResult } from "./loop.js"
 
 // The run event stream. The kernel emits it; storing, resuming or replaying it
 // is the application's, because that needs persistence a kernel must not ship.
