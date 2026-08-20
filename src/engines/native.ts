@@ -1,5 +1,7 @@
-import { runAgent } from "../agent.js"
+import { resolveLoopLimits } from "../agent.js"
 import { assembleContext, renderContext, type ContextProvider } from "../context/types.js"
+import { nativeLoop, type Loop } from "../loop.js"
+import { asChatModel } from "../models/chat.js"
 import { selectProvider } from "../providers/index.js"
 import { secretsToEnv } from "../secrets.js"
 import { primitiveTools, connectorTools } from "../tools/registry.js"
@@ -27,6 +29,13 @@ export interface NativeEngineOptions {
    * built from `spec.context` alone, exactly as before this seam existed.
    */
   contextProviders?: ContextProvider[]
+  /**
+   * The control loop that drives the run. Defaults to `nativeLoop` — the loop
+   * this engine has always run — so an engine constructed without one is
+   * unchanged. Pass your own to change control flow (a confirmation gate, a
+   * plan-then-execute shape) without forking the engine or the loop.
+   */
+  loop?: Loop
 }
 
 /**
@@ -41,10 +50,12 @@ export class NativeEngine implements AgentEngine {
 
   private readonly domainTools: DomainToolFactory
   private readonly contextProviders: ContextProvider[]
+  private readonly loop: Loop
 
   constructor(options: NativeEngineOptions = {}) {
     this.domainTools = options.domainTools ?? (() => [])
     this.contextProviders = options.contextProviders ?? []
+    this.loop = options.loop ?? nativeLoop
   }
 
   supports(): EngineSupport {
@@ -77,19 +88,24 @@ export class NativeEngine implements AgentEngine {
       const tools = [...primitives, ...connectors.tools]
       ctx.log(`tools: ${tools.map((t) => t.spec.name).join(", ") || "(none)"}`)
 
-      const text = await runAgent({
-        provider,
-        system: buildSystemPrompt(spec.workflow, spec.workspaceId, spec.workflowPath),
-        userPrompt: buildUserPrompt(spec.workflow, await this.buildContext(spec, ctx), spec.inputs),
-        tools,
-        log: ctx.log,
-        ...(ctx.emit ? { emit: ctx.emit } : {}),
-        ...(spec.limits?.maxSteps !== undefined ? { maxSteps: spec.limits.maxSteps } : {}),
-        ...(spec.limits?.maxDurationMs !== undefined
-          ? { maxDurationMs: spec.limits.maxDurationMs }
-          : {}),
-      })
-      return { text, knowledge: [], issues: [] }
+      // Budgets are resolved before the call: a loop is handed numbers, not
+      // optionals, so a second implementation cannot accidentally run to a
+      // different ceiling than the one the kernel ships.
+      const result = await this.loop.run(
+        {
+          model: asChatModel(provider),
+          system: buildSystemPrompt(spec.workflow, spec.workspaceId, spec.workflowPath),
+          userPrompt: buildUserPrompt(
+            spec.workflow,
+            await this.buildContext(spec, ctx),
+            spec.inputs,
+          ),
+          tools,
+          limits: resolveLoopLimits(spec.limits),
+        },
+        { log: ctx.log, ...(ctx.emit ? { emit: ctx.emit } : {}) },
+      )
+      return { text: result.text, knowledge: [], issues: [] }
     } finally {
       // Connectors are only needed during the loop; close them here (the engine
       // opened them) regardless of how run() exits.

@@ -41,6 +41,7 @@ ESM-only, Node >= 22.
 | **Model seam** | `ModelInvocation` — one arrow for every model kind, with declared capabilities, a uniform result envelope and `probe()` |
 | **Providers** | `Provider` interface + `selectProvider()` over Anthropic, OpenAI, OpenRouter, and an offline `mock`; `chatModel()` puts any of them on the seam |
 | **Agent loop** | `runAgent()` — a provider-neutral tool-use loop with step and wall-clock budgets |
+| **Loop** | `Loop` + `nativeLoop` — the control loop as a seam; the kernel ships one and it is the loop `runAgent` has always run |
 | **Run events** | `RunEvent` — an ordered, structured account of a run (turns, tool calls, budgets, outcome), emitted to an optional sink |
 | **Tools** | `Tool`, `primitiveTools()` (`run_code`, `read_file`, `list_files`, `http_fetch`), `connectorTools()`, `modelAsTool()`, metadata + projections |
 | **Connectors** | `connectMcp()` — MCP clients over stdio / streamable HTTP / SSE |
@@ -52,7 +53,7 @@ ESM-only, Node >= 22.
 ## Extension points
 
 The kernel is meant to be extended from outside, never patched from inside.
-There are six seams, and each ships with the in-process default that makes it
+There are seven seams, and each ships with the in-process default that makes it
 usable on its own — no database, no service, no infrastructure.
 
 **1. Model kinds.** A chat LLM is one kind among several. Register any other and
@@ -112,6 +113,28 @@ projections down to what a provider actually needs — and `modelAsTool()`, whic
 surfaces any model invocation as a callable tool. That last one is the cleanest
 form of extension: a perception model becomes something the chat loop can call
 without the loop, the engines, or any kernel code learning perception exists.
+
+**7. The loop.** The control flow itself. Everything above answers "which
+implementation?" for something the loop *uses*; this is the loop.
+
+```ts
+const confirmFirst: Loop = {
+  name: "confirm-first",
+  run: async (req, ctx) => {
+    const gated = req.tools.filter((t) => t.meta?.requiresConfirmation)
+    if (gated.length > 0) return { text: "awaiting confirmation", steps: 0, outcome: "completed" }
+    return nativeLoop.run(req, ctx)
+  },
+}
+new NativeEngine({ loop: confirmFirst })
+```
+
+A loop is handed **resolved** materials — a bound model, built prompts, a
+projected tool surface, budgets as numbers rather than optionals (via
+`resolveLoopLimits`, the one place defaults live). It decides control flow and
+nothing else, which is what keeps a second implementation small enough to be
+worth writing. `runAgent` and `nativeLoop` are the same code path, so they
+cannot drift.
 
 Capabilities are **checked, not assumed**: asking a model to stream when it
 declared `streaming: false` throws a `CapabilityError` instead of quietly
