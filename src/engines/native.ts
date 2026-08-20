@@ -1,6 +1,7 @@
 import { resolveLoopLimits } from "../agent.js"
 import { assembleContext, renderContext, type ContextProvider } from "../context/types.js"
-import { nativeLoop, type Loop } from "../loop.js"
+import { runEventEmitter } from "../events.js"
+import { nativeLoop, runWithEvents, type Loop } from "../loop.js"
 import { asChatModel } from "../models/chat.js"
 import { selectProvider } from "../providers/index.js"
 import { secretsToEnv } from "../secrets.js"
@@ -91,7 +92,8 @@ export class NativeEngine implements AgentEngine {
       // Budgets are resolved before the call: a loop is handed numbers, not
       // optionals, so a second implementation cannot accidentally run to a
       // different ceiling than the one the kernel ships.
-      const result = await this.loop.run(
+      const result = await runWithEvents(
+        this.loop,
         {
           model: asChatModel(provider),
           system: buildSystemPrompt(spec.workflow, spec.workspaceId, spec.workflowPath),
@@ -103,7 +105,9 @@ export class NativeEngine implements AgentEngine {
           tools,
           limits: resolveLoopLimits(spec.limits),
         },
-        { log: ctx.log, ...(ctx.emit ? { emit: ctx.emit } : {}) },
+        // The bookends come from `runWithEvents`, so an application's own loop
+        // gets them without having to know they exist.
+        { log: ctx.log, events: runEventEmitter(ctx.emit, ctx.log) },
       )
       return { text: result.text, knowledge: [], issues: [] }
     } finally {

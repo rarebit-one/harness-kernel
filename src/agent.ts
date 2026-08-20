@@ -4,7 +4,13 @@ import {
   type RunOutcome,
   type ToolSucceededEvent,
 } from "./events.js"
-import type { LoopContext, LoopRequest, LoopResult } from "./loop.js"
+import {
+  nativeLoop,
+  runWithEvents,
+  type LoopContext,
+  type LoopRequest,
+  type LoopResult,
+} from "./loop.js"
 import { asChatModel, type ChatModel } from "./models/chat.js"
 import type { InvokeContext } from "./models/types.js"
 import type { AgentMessage, Provider, ToolResult } from "./providers/types.js"
@@ -128,7 +134,9 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
   // A `Provider` is adapted onto the model seam; a `ChatModel` passes straight
   // through. Either way the loop talks to one interface, so a
   // middleware-wrapped or registry-resolved model drives it identically.
-  const result = await runNativeLoop(
+  const log = options.log ?? (() => {})
+  const result = await runWithEvents(
+    nativeLoop,
     {
       model: asChatModel(options.provider),
       system: options.system,
@@ -136,7 +144,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
       tools: options.tools,
       limits: resolveLoopLimits(options),
     },
-    { log: options.log ?? (() => {}), ...(options.emit ? { emit: options.emit } : {}) },
+    { log, events: runEventEmitter(options.emit, log) },
   )
   return result.text
 }
@@ -155,13 +163,13 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   const log = loopCtx.log
 
   const ctx: InvokeContext = { log, budget: { maxDurationMs } }
-  const events = runEventEmitter(loopCtx.emit, log)
+  // The emitter is the caller's: `seq` is per RUN, not per loop, so a loop that
+  // made its own would restart the numbering mid-stream.
+  const events = loopCtx.events
 
   const byName = new Map(tools.map((t) => [t.spec.name, t]))
   const specs = toToolSpecs(tools)
   const messages: AgentMessage[] = [{ role: "user", text: userPrompt }]
-
-  events.emit({ type: "run.started", maxSteps, maxDurationMs, tools: specs.map((s) => s.name) })
 
   const deadline = Date.now() + maxDurationMs
   let finalText = ""
@@ -170,126 +178,110 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   let timedOut = false
   let stepsTaken = 0
 
-  // The loop is wrapped so a rejecting model invocation still CLOSES the stream
-  // before the error propagates. Without this a persistent consumer holds a
-  // `run.started` with no terminal event, which is indistinguishable from a run
-  // that is still going — the plausible-zero failure, in stream form. The error
-  // itself is rethrown untouched; this changes what is observed, never what is
-  // thrown.
-  try {
-    for (let step = 0; step < maxSteps; step += 1) {
-      // Wall-clock budget: enforced between steps so an in-flight provider/tool
-      // call isn't interrupted mid-flight, mirroring how maxSteps stops cleanly.
-      // Because the check is only between steps, a single step can overshoot the
-      // budget by its entire duration: up to (provider timeout × maxRetries) for the
-      // converse call plus the time to execute all of that step's tool calls. So the
-      // effective ceiling is `maxDurationMs + one full step`, not `maxDurationMs`.
-      if (Date.now() >= deadline) {
-        timedOut = true
-        log(`reached run time budget (${maxDurationMs}ms) after ${step} step(s)`)
-        events.emit({ type: "run.budget_exhausted", kind: "duration", step })
-        break
-      }
-      const { value: turn } = await model.invoke({ system, messages, tools: specs }, ctx)
-      stepsTaken = step + 1
-      messages.push({ role: "assistant", text: turn.text, toolCalls: turn.toolCalls })
-      if (turn.text) lastAssistantText = turn.text
-      events.emit({
-        type: "model.turn",
-        step,
-        text: turn.text,
-        toolCalls: turn.toolCalls.map((c) => ({ id: c.id, name: c.name })),
-      })
+  // A throw propagates untouched; `runWithEvents` closes the stream around it,
+  // so every loop gets that property rather than only this one.
+  for (let step = 0; step < maxSteps; step += 1) {
+    // Wall-clock budget: enforced between steps so an in-flight provider/tool
+    // call isn't interrupted mid-flight, mirroring how maxSteps stops cleanly.
+    // Because the check is only between steps, a single step can overshoot the
+    // budget by its entire duration: up to (provider timeout × maxRetries) for the
+    // converse call plus the time to execute all of that step's tool calls. So the
+    // effective ceiling is `maxDurationMs + one full step`, not `maxDurationMs`.
+    if (Date.now() >= deadline) {
+      timedOut = true
+      log(`reached run time budget (${maxDurationMs}ms) after ${step} step(s)`)
+      events.emit({ type: "run.budget_exhausted", kind: "duration", step })
+      break
+    }
+    const { value: turn } = await model.invoke({ system, messages, tools: specs }, ctx)
+    stepsTaken = step + 1
+    messages.push({ role: "assistant", text: turn.text, toolCalls: turn.toolCalls })
+    if (turn.text) lastAssistantText = turn.text
+    events.emit({
+      type: "model.turn",
+      step,
+      text: turn.text,
+      toolCalls: turn.toolCalls.map((c) => ({ id: c.id, name: c.name })),
+    })
 
-      if (turn.toolCalls.length === 0) {
-        finalText = turn.text
-        break
-      }
+    if (turn.toolCalls.length === 0) {
+      finalText = turn.text
+      break
+    }
 
-      const results: ToolResult[] = []
-      for (const call of turn.toolCalls) {
-        const tool = byName.get(call.name)
-        if (!tool) {
-          results.push({
-            toolCallId: call.id,
-            content: `unknown tool: ${call.name}`,
-            isError: true,
-          })
-          log(`tool ${call.name} (unknown)`)
-          events.emit({
-            type: "tool.failed",
-            step,
-            callId: call.id,
-            name: call.name,
-            reason: "unknown_tool",
-            error: `unknown tool: ${call.name}`,
-          })
-          continue
-        }
-        // Emitted BEFORE execution: a process that dies mid-tool still leaves
-        // evidence that the effect may have started, which is the one case a
-        // rollback consumer cannot afford to infer from silence.
+    const results: ToolResult[] = []
+    for (const call of turn.toolCalls) {
+      const tool = byName.get(call.name)
+      if (!tool) {
+        results.push({
+          toolCallId: call.id,
+          content: `unknown tool: ${call.name}`,
+          isError: true,
+        })
+        log(`tool ${call.name} (unknown)`)
         events.emit({
-          type: "tool.called",
+          type: "tool.failed",
           step,
           callId: call.id,
           name: call.name,
-          input: detach(call.input),
+          reason: "unknown_tool",
+          error: `unknown tool: ${call.name}`,
+        })
+        continue
+      }
+      // Emitted BEFORE execution: a process that dies mid-tool still leaves
+      // evidence that the effect may have started, which is the one case a
+      // rollback consumer cannot afford to infer from silence.
+      events.emit({
+        type: "tool.called",
+        step,
+        callId: call.id,
+        name: call.name,
+        input: detach(call.input),
+        ...undoFields(tool.meta),
+      })
+      try {
+        // Uses the tool's structured executor when it has one, so a typed
+        // payload survives alongside the string the model sees. Tools without
+        // one take the original string path unchanged.
+        const output = await executeTool(tool, call.input)
+        results.push({
+          toolCallId: call.id,
+          content: truncate(output.content),
+          ...(output.structured !== undefined ? { structured: output.structured } : {}),
+        })
+        log(`tool ${call.name} ok (${output.content.length} bytes)`)
+        // Reversibility is copied from the tool's own metadata at call time —
+        // the tool set can differ per run, so a consumer reading the stream
+        // later must not have to reconstruct which registry was in play.
+        events.emit({
+          type: "tool.succeeded",
+          step,
+          callId: call.id,
+          name: call.name,
+          bytes: Buffer.byteLength(output.content, "utf8"),
           ...undoFields(tool.meta),
         })
-        try {
-          // Uses the tool's structured executor when it has one, so a typed
-          // payload survives alongside the string the model sees. Tools without
-          // one take the original string path unchanged.
-          const output = await executeTool(tool, call.input)
-          results.push({
-            toolCallId: call.id,
-            content: truncate(output.content),
-            ...(output.structured !== undefined ? { structured: output.structured } : {}),
-          })
-          log(`tool ${call.name} ok (${output.content.length} bytes)`)
-          // Reversibility is copied from the tool's own metadata at call time —
-          // the tool set can differ per run, so a consumer reading the stream
-          // later must not have to reconstruct which registry was in play.
-          events.emit({
-            type: "tool.succeeded",
-            step,
-            callId: call.id,
-            name: call.name,
-            bytes: Buffer.byteLength(output.content, "utf8"),
-            ...undoFields(tool.meta),
-          })
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err)
-          results.push({ toolCallId: call.id, content: message, isError: true })
-          log(`tool ${call.name} error: ${message}`)
-          events.emit({
-            type: "tool.failed",
-            step,
-            callId: call.id,
-            name: call.name,
-            reason: "threw",
-            error: message,
-          })
-        }
-      }
-      messages.push({ role: "tool", results })
-
-      if (step === maxSteps - 1) {
-        exhausted = true
-        events.emit({ type: "run.budget_exhausted", kind: "steps", step })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        results.push({ toolCallId: call.id, content: message, isError: true })
+        log(`tool ${call.name} error: ${message}`)
+        events.emit({
+          type: "tool.failed",
+          step,
+          callId: call.id,
+          name: call.name,
+          reason: "threw",
+          error: message,
+        })
       }
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    events.emit({
-      type: "run.finished",
-      outcome: "failed",
-      steps: stepsTaken,
-      text: lastAssistantText,
-      error: message,
-    })
-    throw err
+    messages.push({ role: "tool", results })
+
+    if (step === maxSteps - 1) {
+      exhausted = true
+      events.emit({ type: "run.budget_exhausted", kind: "steps", step })
+    }
   }
 
   // Ran out of time mid-loop: don't spend more of the (already-blown) budget on
@@ -297,7 +289,6 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   if (!finalText && timedOut) {
     const accumulated = lastAssistantText || "(no output before time budget exhausted)"
     const text = `${accumulated}\n\n[run stopped: wall-clock budget of ${maxDurationMs}ms exceeded]`
-    events.emit({ type: "run.finished", outcome: "timed_out", steps: stepsTaken, text })
     return { text, steps: stepsTaken, outcome: "timed_out" }
   }
 
@@ -324,8 +315,8 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   // `steps_exhausted`, because the distinction is exactly what a consumer needs
   // to know about the trustworthiness of the answer.
   const outcome: RunOutcome = timedOut ? "timed_out" : exhausted ? "steps_exhausted" : "completed"
-  events.emit({ type: "run.finished", outcome, steps: stepsTaken, text })
-  // The return value and the terminal event are two views of one run, built
-  // from the same three values so they cannot disagree.
+  // `runWithEvents` builds the terminal event from exactly this result, so the
+  // return value and the stream cannot disagree — there is one source now, not
+  // two that happen to be written from the same variables.
   return { text, steps: stepsTaken, outcome }
 }

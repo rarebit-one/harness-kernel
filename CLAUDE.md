@@ -124,6 +124,14 @@ Don't add tests that require a live provider key.
   seam exists so an application can supply DIFFERENT control flow, never so the
   kernel can carry two of its own — a second in-kernel loop is the tell that
   this rule has been broken.
+- **Bookends belong to the wrapper, not the loop.** `runWithEvents` emits
+  `run.started`/`run.finished` around whichever `Loop` runs; a loop emits only
+  its own middle. `LoopContext` carries a `RunEventEmitter`, never a raw sink,
+  so a loop physically cannot emit an unnumbered event, and that emitter's type
+  (`LoopEventEmitter`) excludes the bookends so it cannot emit a duplicate one
+  either. Both properties exist
+  because the loop is a seam now: anything that relies on a future implementor
+  remembering to do it is not a property, it is a hope.
 - **Emit, never store.** The kernel produces the run event stream; it keeps
   none of it. A session store, resume, fork or replay needs persistence and a
   schema, which is the same infrastructure the "seams, not implementations" rule

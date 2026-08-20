@@ -152,6 +152,17 @@ await runAgent({ provider, system, userPrompt, tools, emit: sink })
 // events: run.started -> model.turn -> tool.called -> tool.succeeded -> ... -> run.finished
 ```
 
+The **bookends** — `run.started` and `run.finished` — are emitted by
+`runWithEvents`, which wraps whichever `Loop` runs. A loop emits only what
+happens inside it, so a custom loop that emits nothing still produces a run that
+is visibly a run. A guarantee that depends on every future implementor
+remembering it is not a guarantee.
+
+On the failure path `steps` and `text` are **omitted**, not zeroed: the loop
+threw and never returned a result, so any number there would be invented. The
+`model.turn` events already in the stream are the authoritative record of how
+far it got.
+
 Engines take the same sink through `EngineContext`:
 
 ```ts
