@@ -104,6 +104,27 @@ export type { ContextProvider, ContextFragment, ContextSpec } from "./context/ty
 export { runAgent, maxToolResultBytes } from "./agent.js"
 export type { RunAgentOptions } from "./agent.js"
 
+// The run event stream. The kernel emits it; storing, resuming or replaying it
+// is the application's, because that needs persistence a kernel must not ship.
+export { runEventEmitter, recordRunEvents } from "./events.js"
+export type {
+  RunEvent,
+  RunEventType,
+  RunEventBase,
+  RunEventInput,
+  RunEventSink,
+  RunEventEmitter,
+  RunOutcome,
+  BudgetKind,
+  RunStartedEvent,
+  ModelTurnEvent,
+  ToolCalledEvent,
+  ToolSucceededEvent,
+  ToolFailedEvent,
+  RunBudgetExhaustedEvent,
+  RunFinishedEvent,
+} from "./events.js"
+
 // ---------------------------------------------------------------------------
 // Extension point 6 — tools: generic primitives, injectable domain emissions,
 // MCP connectors, rich metadata + projections, and models-as-tools

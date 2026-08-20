@@ -31,6 +31,7 @@ around — the kernel never bends to a consumer.
 | `src/context/` | `ContextProvider` chain — `assembleContext` / `renderContext` |
 | `src/providers/` | `Provider` interface + anthropic / openai / openrouter / mock adapters, `selectProvider` |
 | `src/agent.ts` | `runAgent` — the tool-use loop, driven through the model seam |
+| `src/events.ts` | `RunEvent` + `runEventEmitter` / `recordRunEvents` — the structured run stream the loop and `EngineContext` emit |
 | `src/tools/` | `Tool` + `primitiveTools` (generic) / `connectorTools`; `metadata.ts` (scoping + projections); `modelTool.ts` (a model surfaced as a tool). Domain tools are the application's, injected via `DomainToolFactory`. |
 | `src/primitives/` | Sandbox primitives: `codeExec`, `fs`, `http`, `download` |
 | `src/engines/` | The `AgentEngine` seam + native / claude-code / codex harnesses; the capability *mechanism* (guards, `write_file`, MCP + stdio transports) — never an application's capability set |
@@ -116,6 +117,14 @@ Don't add tests that require a live provider key.
   The workspace-scope and path guards (`denyCrossWorkspace`, `resolveWithin`) are
   exported so application capabilities inherit identical security properties
   rather than reimplementing them slightly differently.
+- **Emit, never store.** The kernel produces the run event stream; it keeps
+  none of it. A session store, resume, fork or replay needs persistence and a
+  schema, which is the same infrastructure the "seams, not implementations" rule
+  already keeps out. `recordRunEvents()` is a test recorder and a reference
+  shape — if it ever grows identity, durability or a size bound, it has become
+  the thing this rule forbids. Observability is also never fatal: a sink that
+  throws is logged and skipped, the same treatment a failing context provider
+  gets.
 - **Fail loud, never silently degrade.** `AgentEngine.supports()` returns a
   reason and the caller fails the run; capabilities reject cross-workspace calls
   outright. The one deliberate exception is the offline `mock` provider fallback.
