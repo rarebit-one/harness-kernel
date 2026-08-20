@@ -1,7 +1,6 @@
 import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import type { KnowledgeEntry } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { CAPABILITY_SERVER_NAME } from "./capabilityMcp.js"
 import { connectorServers, writeCodexConfig, type SerializableMcpServer } from "./connectorMcp.js"
@@ -165,19 +164,30 @@ export class CodexEngine implements AgentEngine {
       await rm(codexHome, { recursive: true, force: true })
     }
 
-    const emissionsExists = await stat(emissionsFile).then(
-      () => true,
-      () => false,
+    // The stat's SIZE is the log's byte count, for two reasons. It is the only
+    // honest one — `JSON.stringify(x).length` counts UTF-16 code units, not
+    // bytes, and under-reports anything outside the BMP. And measuring by
+    // re-serializing allocates a second copy of a payload that may be large,
+    // to produce a number we already have on disk.
+    const emissionsStat = await stat(emissionsFile).then(
+      (st) => st,
+      () => undefined,
     )
     const emissions = await readEmissions(emissionsFile)
+    // The engine reports whether the round trip HAPPENED, not what it carried:
+    // counting entries would mean knowing the shape, which is the coupling this
+    // is rid of. Presence plus size separates "the server never wrote" from "it
+    // wrote and the run emitted nothing".
     ctx.log(
-      `codex: capability emissions — file ${emissionsExists ? "present" : "absent"}, ` +
-        `${emissions.issues.length} issue(s), ${emissions.knowledge.length} knowledge`,
+      `codex: capability emissions — file ${emissionsStat ? `present (${emissionsStat.size} bytes)` : "absent"}` +
+        `${emissionsStat && emissions === undefined ? ", unreadable" : ""}`,
     )
     await rm(emissionsDir, { recursive: true, force: true })
-    const knowledge: KnowledgeEntry[] = emissions.knowledge
 
-    return { text: finalText || "(no output)", knowledge, issues: emissions.issues }
+    return {
+      text: finalText || "(no output)",
+      ...(emissions !== undefined ? { emissions } : {}),
+    }
   }
 }
 

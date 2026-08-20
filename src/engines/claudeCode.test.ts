@@ -53,7 +53,9 @@ describe("ClaudeCodeEngine.run", () => {
     )
 
     expect(result.text).toBe("## Done")
-    expect(result.knowledge).toEqual([])
+    // Nothing to hand back: the application reads emissions from the sinks its
+    // own injected capabilities close over.
+    expect(result.emissions).toBeUndefined()
     // The engine hands the driver its runner-hosted capability surface.
     // The kernel's default surface is the one capability with no product
     // semantics; an application injects the rest.

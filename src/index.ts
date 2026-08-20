@@ -5,13 +5,7 @@
 // ---------------------------------------------------------------------------
 // Shared shapes callers hand in
 // ---------------------------------------------------------------------------
-export type {
-  ConnectorConfig,
-  Permissions,
-  WorkflowDefinition,
-  KnowledgeEntry,
-  IssueEntry,
-} from "./types.js"
+export type { ConnectorConfig, Permissions, WorkflowDefinition } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Providers — the model adapters and their selection
@@ -213,8 +207,7 @@ export {
 export type { CapabilityStdioOptions, CapabilityStdioConfig } from "./engines/capabilityStdio.js"
 // The emissions file: the generic seam for getting state back out of an
 // out-of-process engine, which cannot share memory with the run that spawned it.
-export { emptyEmissions, readEmissions, writeEmissions } from "./engines/capabilityEmissions.js"
-export type { Emissions } from "./engines/capabilityEmissions.js"
+export { readEmissions, writeEmissions } from "./engines/capabilityEmissions.js"
 
 // ---------------------------------------------------------------------------
 // Secrets

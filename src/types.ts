@@ -1,8 +1,11 @@
-// The shapes a caller hands the kernel. Nothing here is application-specific:
-// they describe what a run is *given* (connectors, permissions, a workflow) and
-// what it can *emit* (knowledge, issues), not any particular product's domain.
-// A host that speaks its own wire protocol re-exports these alongside its own
-// contract types, so the two stay structurally aligned.
+// The shapes a caller hands the kernel: what a run is *given* — connectors,
+// permissions, a workflow. Nothing here is application-specific.
+//
+// What a run *emits* used to live here too, as `KnowledgeEntry` and
+// `IssueEntry`. It doesn't any more: those were one product's vocabulary, and a
+// kernel that names them has already lost the argument. Emissions are opaque —
+// see `EngineResult.emissions`. A host defines its own emission shapes and
+// casts.
 
 /**
  * A single external connector the harness can talk to. `kind` distinguishes a
@@ -34,42 +37,6 @@ export interface Permissions {
   /** Egress allowlist (host[:port]) for the http_fetch primitive. */
   hosts?: string[]
   [key: string]: unknown
-}
-
-/**
- * A piece of durable knowledge a run chose to record (via the
- * `promote_knowledge` tool or capability). The kernel only collects these into
- * the run's sink and returns them; what a caller does with them — store,
- * review, promote behind an approval gate — is the caller's concern.
- * `content` is required; `title`/`kind` are optional hints.
- */
-export interface KnowledgeEntry {
-  content: string
-  title?: string
-  kind?: string
-  /** Path to store the entry under (the caller derives one when absent). */
-  path?: string
-  /** Idempotency key so a re-run doesn't promote the same entry twice. */
-  dedupe_key?: string
-  /** Attribution label; the caller supplies a default when absent. */
-  source?: string
-}
-
-/**
- * An operational issue a run chose to open (via the `record_issue` tool or the
- * `open_issue` capability) — the "a human should look at this" surface a run
- * emits. As with knowledge, the kernel only collects them. `title` is required;
- * a stable `dedupe_key` lets a caller UPDATE the same issue on a re-run rather
- * than opening a duplicate.
- */
-export interface IssueEntry {
-  title: string
-  /** Markdown issue body (optional). */
-  body?: string
-  /** Stable key so a re-run upserts one rolling issue instead of duplicating. */
-  dedupe_key?: string
-  /** Optional labels for the issue. */
-  labels?: string[]
 }
 
 /**

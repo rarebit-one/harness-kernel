@@ -1,12 +1,6 @@
 import type { RunEventSink } from "../events.js"
 import type { ProviderSelection } from "../providers/index.js"
-import type {
-  ConnectorConfig,
-  IssueEntry,
-  KnowledgeEntry,
-  Permissions,
-  WorkflowDefinition,
-} from "../types.js"
+import type { ConnectorConfig, Permissions, WorkflowDefinition } from "../types.js"
 
 /**
  * The provider-neutral, harness-neutral description of one workflow run, handed
@@ -67,23 +61,25 @@ export interface EngineContext {
 /**
  * What an engine returns.
  *
- * NOTE — known residual coupling. `knowledge` and `issues` are shaped by one
- * application's run protocol, which is not something a generic kernel should
- * know. Now that capabilities and domain tools are injected, the application
- * owns the sinks they write to and reads emissions from there; the in-process
- * engines leave these empty. They survive only because the out-of-process
- * engine (codex) still hands back what it read from the emissions file, and
- * genericising that round trip is a wider change than the extraction it would
- * have ridden along with. The intended end state is a single opaque
- * `emissions?: unknown` the kernel never inspects.
+ * `text` is the run's prose — the one thing every engine has. `emissions` is
+ * whatever else the run produced, and the kernel **never inspects it**: what a
+ * run may emit is the application's vocabulary, not the kernel's.
+ *
+ * This used to be `knowledge: KnowledgeEntry[]` and `issues: IssueEntry[]` —
+ * one application's run protocol, in the kernel's own return type, which the
+ * comment here admitted was wrong and named this as the intended end state. The
+ * in-process engines left them empty and only the out-of-process engine filled
+ * them, so the fields cost every engine a shape they had no use for.
+ *
+ * Opaque means opaque: the kernel does not parse, validate, or default it. An
+ * engine that has nothing to hand back omits it, and a caller casts it to
+ * whatever its own capability surface agreed to write.
  */
 export interface EngineResult {
   /** Final assistant prose for the run; the caller writes it as the run artifact. */
   text: string
-  /** See the note above: application-shaped, and empty from the in-process engines. */
-  knowledge: KnowledgeEntry[]
-  /** See the note above: application-shaped, and empty from the in-process engines. */
-  issues: IssueEntry[]
+  /** Anything else the run produced, in the application's own shape. */
+  emissions?: unknown
 }
 
 /** The outcome of an engine's capability check for a given run. */
@@ -92,8 +88,9 @@ export type EngineSupport = { ok: true } | { ok: false; reason: string }
 /**
  * A pluggable agent harness. Implementations: the in-process native tool-use
  * loop, and (as adapters) Claude Code / Codex. An engine drives the agent to
- * completion against {@link RunSpec.workdir} and returns prose + knowledge;
- * file changes land on disk and are captured by the caller's change-set diff.
+ * completion against {@link RunSpec.workdir} and returns prose plus whatever
+ * else the run emitted; file changes land on disk and are captured by the
+ * caller's change-set diff.
  */
 export interface AgentEngine {
   readonly name: string
