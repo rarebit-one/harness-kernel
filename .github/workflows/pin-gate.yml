@@ -31,4 +31,4 @@ jobs:
       contents: read
     uses: rarebit-one/.github/.github/workflows/pin-check.yml@main
     with:
-      runner-label: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+      runner-label: ${{ vars.RUNNER_LABEL_BROKER || vars.RUNNER_LABEL || 'ubuntu-latest' }}
