@@ -1,0 +1,40 @@
+name: CodeQL (Actions)
+
+# Scans the workflows themselves, matching the pair `standard_health` runs.
+#
+# Worth more here than in an ordinary library repo: this one carries
+# `publish.yml`, an armed-by-variable actuator that publishes to a public
+# registry under an OIDC identity. A flaw in THAT is a supply-chain flaw, and it
+# lives in YAML the JS/TS analysis never looks at.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+  schedule:
+    - cron: "30 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze Actions workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          languages: actions
+      - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          category: "/language:actions"

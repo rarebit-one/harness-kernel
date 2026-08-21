@@ -1,0 +1,49 @@
+name: CodeQL
+
+# The estate's JS/TS house shape, copied from `storybook-inertia` (itself from
+# sidekick-labs/sidekick-ui). The Ruby gems run a byte-identical `codeql.yml` of
+# their own with `languages: ruby`.
+#
+# Added the day this repo went public (2026-08-21), because CodeQL is FREE on
+# public repos and licensed (GHAS) on private ones — every private repo in the
+# org returns `403 Code Security must be enabled`, so none runs it and none pays
+# for it. Being public is the whole reason this file can exist.
+#
+# This is a PUBLISHED package, which raises the stakes over an ordinary repo: a
+# vulnerability here reaches every consumer through npm, and scanning costs
+# nothing.
+#
+# Language measured, not assumed: TypeScript 325.8 KB (97%), JavaScript 1.3 KB —
+# so `javascript-typescript` covers effectively all of it. Default setup was
+# `not-configured` when this landed; advanced and default setup CONFLICT, so
+# check that before adding a second scanner.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (JavaScript/TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          category: "/language:javascript-typescript"
