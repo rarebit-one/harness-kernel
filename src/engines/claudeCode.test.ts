@@ -114,7 +114,7 @@ describe("ClaudeCodeEngine.run", () => {
 
   it("exposes an injected capability surface to the driver", async () => {
     // The kernel no longer knows what an application emits; it only guarantees
-    // the surface it is handed reaches the engine. The Jumpdrive-specific
+    // the surface it is handed reaches the engine. An application's own
     // emission capabilities and their round-trip live in that application.
     let captured: ClaudeCodeOptions | undefined
     const engine = new ClaudeCodeEngine(
