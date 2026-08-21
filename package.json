@@ -3,6 +3,7 @@
   "version": "0.5.0",
   "description": "Provider-neutral AI-harness kernel — LLM adapters, tool-use loop, MCP connectors, and a pluggable agent-engine seam",
   "license": "MIT",
+  "author": "Jaryl Sim <code@jaryl.dev>",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
