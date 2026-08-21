@@ -1,7 +1,7 @@
 import { createWriteStream } from "node:fs"
 import { copyFile, rm } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
-import { assertSafeUrl, type Lookup } from "./http.js"
+import { assertSafeScheme, assertSafeUrl, type Lookup } from "./http.js"
 
 const FALLBACK_MAX_BYTES = 1024 * 1024 * 1024 // 1 GiB
 const FALLBACK_TIMEOUT_MS = 120_000
@@ -78,6 +78,13 @@ export async function downloadToFile(
     let current = url
     let res: Response
     for (let hops = 0; ; hops++) {
+      // The scheme check is UNCONDITIONAL — outside the `allowPrivate` branch on
+      // purpose. Trusting a private HOST is not the same concession as trusting
+      // a plaintext TRANSPORT, and the two were conflated: setting
+      // RUNNER_ALLOW_PRIVATE_BUNDLE_HOSTS skipped `assertSafeUrl` entirely and
+      // silently took the (previously nonexistent) scheme check with it. This
+      // tarball is extracted and executed, so a MITM here is code execution.
+      assertSafeScheme(current)
       if (!allowPrivate) await assertSafeUrl(current, { lookup: opts.lookup })
       res = await fetch(current, { redirect: "manual", signal: controller.signal })
       if (res.status >= 300 && res.status < 400 && res.headers.has("location")) {

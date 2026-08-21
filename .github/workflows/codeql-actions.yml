@@ -12,8 +12,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    paths:
-      - ".github/workflows/**"
+    # NO `paths:` filter, deliberately. Scoping this to workflow changes seems
+    # obviously right and is wrong: the repo-level `CodeQL` status check
+    # compares a PR against the configurations present on `main`, so a skipped
+    # analysis reports `1 configuration not found` and FAILS the check on every
+    # PR that happens not to touch `.github/`. Caught on #42 — the first PR
+    # after this workflow landed. ~41s per PR is the price of a check that is
+    # green when it should be.
   schedule:
     - cron: "30 6 * * 1"
 

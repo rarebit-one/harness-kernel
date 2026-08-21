@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest"
-import { mkdtemp, mkdir, writeFile, symlink } from "node:fs/promises"
+import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { readFileSafe, listFiles } from "./fs.js"
@@ -38,5 +38,29 @@ describe("fs primitives", () => {
 
     expect(await readFileSafe(box, "link.txt")).toBeNull()
     expect(await listFiles(box)).not.toContain("link.txt")
+  })
+})
+
+describe("readFileSafe TOCTOU hardening", () => {
+  it("refuses a symlinked final component even when it points INSIDE the sandbox", async () => {
+    // O_NOFOLLOW. The link is legal by every path rule — it resolves inside the
+    // sandbox — and is still refused, because the guard's job is to read the file
+    // it checked, not an equivalent one. That is what makes the descriptor the
+    // unit of trust rather than the path.
+    const dir = await mkdtemp(path.join(tmpdir(), "fs-toctou-"))
+    await writeFile(path.join(dir, "real.txt"), "payload")
+    await symlink(path.join(dir, "real.txt"), path.join(dir, "link.txt"))
+
+    expect(await readFileSafe(dir, "real.txt")).toBe("payload")
+    expect(await readFileSafe(dir, "link.txt")).toBeNull()
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it("applies the byte cap to the OPENED file, not to a separate stat", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "fs-cap-"))
+    await writeFile(path.join(dir, "big.txt"), "x".repeat(200))
+    expect(await readFileSafe(dir, "big.txt", 100)).toBeNull()
+    expect(await readFileSafe(dir, "big.txt", 1000)).toHaveLength(200)
+    await rm(dir, { recursive: true, force: true })
   })
 })

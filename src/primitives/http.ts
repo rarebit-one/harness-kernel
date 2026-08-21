@@ -71,6 +71,31 @@ type ValidatedRecords = Array<{ address: string; family: number }>
  * would otherwise re-resolve to a different (internal) address. Callers that only
  * need the boolean verdict (e.g. the bundle downloader) can ignore the return.
  */
+/**
+ * Refuse a plaintext URL unless explicitly opted in.
+ *
+ * `assertSafeUrl` validated *who* it was talking to and never *how* — no
+ * protocol check existed anywhere in this file. A guard that resolves DNS
+ * carefully and then speaks plaintext is protecting a channel anyone on the
+ * path can rewrite; for the snapshot download that meant a MITM could swap the
+ * tarball that gets extracted and executed.
+ *
+ * Opt-in mirrors the existing `RUNNER_ALLOW_FILE_URLS` precedent: dev and test
+ * rigs that genuinely need plaintext set it, production leaves it off. Resolved
+ * per call so a changed env takes effect without a reload.
+ *
+ * `file:` is not handled here — `downloadToFile` gates it separately, before
+ * any of this runs.
+ */
+export function assertSafeScheme(target: string | URL): void {
+  const u = typeof target === "string" ? new URL(target) : target
+  if (u.protocol === "https:") return
+  if (process.env.RUNNER_ALLOW_INSECURE_URLS === "1") return
+  throw new Error(
+    `insecure scheme not allowed: ${u.protocol}//; set RUNNER_ALLOW_INSECURE_URLS=1 for local dev`,
+  )
+}
+
 export async function assertSafeUrl(
   target: string,
   opts: { allowHosts?: string[]; lookup?: Lookup } = {},
@@ -78,6 +103,10 @@ export async function assertSafeUrl(
   const { allowHosts, lookup = defaultLookup } = opts
   const u = new URL(target)
   if (isInternalHost(u.hostname)) throw new Error(`host not allowed (internal): ${u.hostname}`)
+  // AFTER the internal-host check on purpose: an internal address should still
+  // report as internal rather than as a scheme problem, because that is the
+  // more specific fact and the one the caller acts on.
+  assertSafeScheme(u)
   if (allowHosts && !allowHosts.includes(u.host)) throw new Error(`host not allowed: ${u.host}`)
 
   const literal = u.hostname.replace(/^\[|\]$/g, "") // URL.hostname keeps IPv6 brackets

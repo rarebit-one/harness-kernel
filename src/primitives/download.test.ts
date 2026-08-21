@@ -70,7 +70,7 @@ describe("downloadToFile", () => {
     vi.stubGlobal("fetch", fetchMock)
     const dest = await tmpFile()
 
-    await expect(downloadToFile("http://169.254.169.254/latest/meta-data", dest)).rejects.toThrow(
+    await expect(downloadToFile("https://169.254.169.254/latest/meta-data", dest)).rejects.toThrow(
       /internal/,
     )
     expect(fetchMock).not.toHaveBeenCalled()
@@ -95,10 +95,46 @@ describe("downloadToFile", () => {
       vi.fn(async () => streamResponse(new Uint8Array([1]))),
     )
     await expect(
-      downloadToFile("http://minio:9000/bucket/x.tar.gz", await tmpFile(), {
+      downloadToFile("https://minio:9000/bucket/x.tar.gz", await tmpFile(), {
         lookup: async () => [{ address: "10.89.10.3", family: 4 }],
       }),
     ).rejects.toThrow(/resolves to internal/)
+  })
+
+  it("refuses plaintext EVEN WITH RUNNER_ALLOW_PRIVATE_BUNDLE_HOSTS=1", async () => {
+    // The invariant this fix exists for. Trusting a private HOST is not the same
+    // concession as trusting a plaintext TRANSPORT, and setting the private-hosts
+    // flag used to skip assertSafeUrl wholesale — silently taking the scheme
+    // check with it. This tarball is extracted and executed, so a MITM on that
+    // hop is code execution in the runner.
+    vi.stubEnv("RUNNER_ALLOW_PRIVATE_BUNDLE_HOSTS", "1")
+    vi.stubEnv("RUNNER_ALLOW_INSECURE_URLS", "")
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+
+    await expect(
+      downloadToFile("http://minio:9000/bucket/x.tar.gz", await tmpFile()),
+    ).rejects.toThrow(/insecure scheme/)
+    // Refused BEFORE any network call — nothing was fetched at all.
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("refuses a plaintext REDIRECT HOP, not just the first request", async () => {
+    // Per-hop, because a https:// URL that redirects to http:// downgrades the
+    // very transport the first check approved.
+    vi.stubEnv("RUNNER_ALLOW_INSECURE_URLS", "")
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(null, { status: 302, headers: { location: "http://evil.example/x" } }),
+        ),
+    )
+
+    await expect(
+      downloadToFile("https://good.example/x.tar.gz", await tmpFile(), { lookup: publicLookup }),
+    ).rejects.toThrow(/insecure scheme/)
   })
 
   it("allows an internal host when RUNNER_ALLOW_PRIVATE_BUNDLE_HOSTS=1 (private object-store opt-in)", async () => {
@@ -110,7 +146,7 @@ describe("downloadToFile", () => {
     )
     const dest = await tmpFile()
 
-    await downloadToFile("http://minio:9000/bucket/x.tar.gz", dest, {
+    await downloadToFile("https://minio:9000/bucket/x.tar.gz", dest, {
       lookup: async () => [{ address: "10.89.10.3", family: 4 }],
     })
 
@@ -136,7 +172,7 @@ describe("downloadToFile", () => {
     // must refuse the second hop (not just the first).
     const fetchMock = vi.fn(
       async () =>
-        new Response(null, { status: 302, headers: { location: "http://169.254.169.254/" } }),
+        new Response(null, { status: 302, headers: { location: "https://169.254.169.254/" } }),
     )
     vi.stubGlobal("fetch", fetchMock)
     await expect(

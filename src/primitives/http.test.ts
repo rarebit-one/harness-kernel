@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, afterEach } from "vitest"
 import http from "node:http"
 import https from "node:https"
 import { execFileSync } from "node:child_process"
@@ -7,7 +7,14 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AddressInfo } from "node:net"
 import { Agent, fetch as undiciFetch } from "undici"
-import { httpFetch, assertSafeUrl, pinnedAgent, type FetchImpl, type Lookup } from "./http.js"
+import {
+  httpFetch,
+  assertSafeUrl,
+  pinnedAgent,
+  type FetchImpl,
+  type Lookup,
+  assertSafeScheme,
+} from "./http.js"
 
 /** A resolver that always returns a public address (keeps tests off real DNS). */
 const publicLookup: Lookup = async () => [{ address: "93.184.216.34", family: 4 }]
@@ -40,11 +47,11 @@ describe("httpFetch", () => {
   })
 
   it("always refuses internal / link-local addresses (SSRF)", async () => {
-    await expect(httpFetch({ url: "http://169.254.169.254/latest/meta-data" })).rejects.toThrow(
+    await expect(httpFetch({ url: "https://169.254.169.254/latest/meta-data" })).rejects.toThrow(
       /internal/,
     )
-    await expect(httpFetch({ url: "http://127.0.0.1:8080/" })).rejects.toThrow(/internal/)
-    await expect(httpFetch({ url: "http://[::1]/" })).rejects.toThrow(/internal/)
+    await expect(httpFetch({ url: "https://127.0.0.1:8080/" })).rejects.toThrow(/internal/)
+    await expect(httpFetch({ url: "https://[::1]/" })).rejects.toThrow(/internal/)
   })
 
   it("re-validates redirect hops against allowHosts", async () => {
@@ -161,6 +168,52 @@ describe("httpFetch", () => {
   })
 })
 
+describe("assertSafeScheme", () => {
+  const saved = process.env.RUNNER_ALLOW_INSECURE_URLS
+  afterEach(() => {
+    if (saved === undefined) delete process.env.RUNNER_ALLOW_INSECURE_URLS
+    else process.env.RUNNER_ALLOW_INSECURE_URLS = saved
+  })
+
+  it("refuses plaintext http by default", () => {
+    delete process.env.RUNNER_ALLOW_INSECURE_URLS
+    expect(() => assertSafeScheme("http://example.com/x")).toThrow(/insecure scheme/)
+  })
+
+  it("allows https", () => {
+    expect(() => assertSafeScheme("https://example.com/x")).not.toThrow()
+  })
+
+  it("re-admits http only under the explicit opt-in", () => {
+    process.env.RUNNER_ALLOW_INSECURE_URLS = "1"
+    expect(() => assertSafeScheme("http://example.com/x")).not.toThrow()
+  })
+
+  it("reads the env per call, so a changed env takes effect without a reload", () => {
+    delete process.env.RUNNER_ALLOW_INSECURE_URLS
+    expect(() => assertSafeScheme("http://example.com/x")).toThrow()
+    process.env.RUNNER_ALLOW_INSECURE_URLS = "1"
+    expect(() => assertSafeScheme("http://example.com/x")).not.toThrow()
+  })
+
+  it("is ENFORCED by assertSafeUrl, not merely available to callers", async () => {
+    // Without this, deleting the assertSafeScheme call inside assertSafeUrl
+    // breaks nothing — verified: the first draft of these specs left exactly
+    // that hole, because they only ever called the helper directly.
+    await expect(assertSafeUrl("http://93.184.216.34/x")).rejects.toThrow(/insecure scheme/)
+  })
+
+  it("is enforced on the httpFetch tool path too", async () => {
+    await expect(httpFetch({ url: "http://93.184.216.34/x" })).rejects.toThrow(/insecure scheme/)
+  })
+
+  it("reports an INTERNAL host as internal, not as a scheme problem", async () => {
+    // The more specific fact is the one a caller acts on. Ordering regression
+    // guard: moving the scheme check above the internal-host check breaks this.
+    await expect(assertSafeUrl("http://127.0.0.1/x")).rejects.toThrow(/internal/)
+  })
+})
+
 describe("assertSafeUrl returns the records to pin", () => {
   it("returns the resolved records for a DNS hostname (the set fetch will be pinned to)", async () => {
     const records = await assertSafeUrl("https://api.good.com/x", { lookup: publicLookup })
@@ -168,9 +221,9 @@ describe("assertSafeUrl returns the records to pin", () => {
   })
 
   it("returns the literal IP for an IP-literal host (no DNS, pinned directly)", async () => {
-    const v4 = await assertSafeUrl("http://93.184.216.34/x")
+    const v4 = await assertSafeUrl("https://93.184.216.34/x")
     expect(v4).toEqual([{ address: "93.184.216.34", family: 4 }])
-    const v6 = await assertSafeUrl("http://[2606:2800:220:1:248:1893:25c8:1946]/x")
+    const v6 = await assertSafeUrl("https://[2606:2800:220:1:248:1893:25c8:1946]/x")
     expect(v6).toEqual([{ address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 }])
   })
 
