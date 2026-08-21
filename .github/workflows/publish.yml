@@ -1,11 +1,30 @@
 name: Publish
 
-# DORMANT until the public flip. The kernel is built OSS-ready (MIT + npmjs OIDC
+# INERT until deliberately armed. The kernel is built OSS-ready (MIT + npmjs OIDC
 # trusted publishing wired) but the repo is private and nothing has been
-# published. This workflow only fires on a GitHub Release, and no Release exists
-# — so it stays inert until someone deliberately cuts the first one after the
-# repo goes public. It needs NO npm token: publishing authenticates via OIDC
+# published. It needs NO npm token: publishing authenticates via OIDC
 # (npm >= 11.5.1 + a trusted publisher configured on npmjs for this repo).
+#
+# ARMING — read this before cutting a Release.
+#
+# "No Release exists yet" was the only thing standing between this workflow and
+# a public npm publish of a PRIVATE codebase, and that is not a safety property,
+# it is an absence. Creating a Release for ANY tag — including backfilling an
+# old one to tidy up the tag list — would have published it, with the first
+# mistake being the irreversible one (npm unpublish is refused once anything
+# depends on the package).
+#
+# So the actuator now ships INERT, per the workspace `actuator-arming`
+# convention: every gate, check and build below runs on a Release exactly as it
+# always did, against real inputs, and the single mutating step is skipped
+# unless the repo variable PUBLISH_LIVE is set to "true". A Release cut by
+# accident produces a loud green no-op that tells you precisely what it would
+# have published.
+#
+# To publish for real: `gh variable set PUBLISH_LIVE --body true --repo <repo>`,
+# cut the Release, then UNSET it again. Arming is a separate, reversible act
+# from releasing — never edit this file to publish. See issue #33 for the
+# public-flip decision this gate exists to protect.
 #
 # Runner routing: runs on the self-hosted homelab via `vars.RUNNER_LABEL_BROKER || vars.RUNNER_LABEL`,
 # matching test.yml and security.yml. The `|| 'ubuntu-latest'` fallback is
@@ -132,12 +151,28 @@ jobs:
         with:
           subject-path: ${{ env.TARBALL }}
 
+      # The ONE mutating step, and the only one gated. Everything above runs
+      # unarmed on purpose: an inert run that skipped the build would prove
+      # nothing about the release it declined to make.
       - name: Publish package
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry-run }}" = "true" ]; then
-            echo "::notice::Dry run — skipping publish"
+          set -euo pipefail
+          DRY_RUN_INPUT="${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || 'false' }}"
+          if [ "$DRY_RUN_INPUT" = "true" ]; then
+            echo "::notice::Dry run requested — not publishing"
             npm publish --dry-run
-          else
-            echo "::notice::Publishing ${{ env.TARBALL }} via OIDC trusted publishing"
-            npm publish
+            exit 0
           fi
+          if [ "${{ vars.PUBLISH_LIVE }}" != "true" ]; then
+            echo "::warning::NOT ARMED — PUBLISH_LIVE is not 'true', so nothing was published."
+            echo "This is the expected state. Everything above (typecheck, lint, test,"
+            echo "build, .d.ts check, version consistency, provenance) ran for real."
+            echo ""
+            echo "What a live run would have published:"
+            npm publish --dry-run
+            echo ""
+            echo "To publish: set the repo variable PUBLISH_LIVE=true, re-run, then UNSET it."
+            exit 0
+          fi
+          echo "::notice::ARMED — publishing ${{ env.TARBALL }} via OIDC trusted publishing"
+          npm publish

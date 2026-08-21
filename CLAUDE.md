@@ -156,7 +156,7 @@ Don't add tests that require a live provider key.
 - **Public API discipline.** A new export is a compatibility commitment. Add it
   to `src/index.ts` deliberately, not incidentally.
 
-## How consumers install it (while npm publishing is dormant)
+## How consumers install it (while nothing is published)
 
 Nothing is on npm yet. Consumers take a **vendored tarball**, not a git or
 registry dependency:
@@ -185,15 +185,38 @@ tarball contains. Landing features without bumping is how `v0.3.0`, `main`'s
 `0.3.0` and two vendored `0.3.0.tgz` files came to be four different code states
 sharing one number.
 
-## Publishing (dormant)
+## Publishing (INERT, not merely unused)
 
 The repo is **private** and **nothing has been published**. `publish.yml` is
 wired for npmjs **OIDC trusted publishing** (`id-token: write`, `environment:
-npm`, build provenance attestation, **no `NPM_TOKEN`**) and triggers only on
-`release: published` — no Release exists, so it cannot fire. Do **not** publish,
-create a Release, or flip the repo public without explicit sign-off. Everything
-is arranged so the flip is a visibility toggle plus a first Release, not a
-refactor.
+npm`, build provenance attestation, **no `NPM_TOKEN`**).
+
+**Creating a GitHub Release for ANY tag runs this workflow** — including
+backfilling an old tag to tidy up the tag list. Until 2026-08-21 the only thing
+preventing a public npm publish of this private codebase was that no Release
+happened to exist, which is an absence rather than a safety property, and the
+first mistake would have been the irreversible one (npm unpublish is refused
+once anything depends on the package).
+
+So the actuator ships **inert**, per the workspace `actuator-arming` convention.
+Every gate below — typecheck, lint, test, build, the `.d.ts` emit check, version
+consistency, provenance — runs on a Release exactly as before, against real
+inputs. The single **mutating** step is skipped unless the repo variable
+`PUBLISH_LIVE` is `"true"`, and an unarmed run prints what it *would* have
+published. A Release cut by accident is a loud green no-op.
+
+```bash
+gh variable set PUBLISH_LIVE --body true --repo rarebit-one/harness-kernel
+# cut the Release
+gh variable delete PUBLISH_LIVE --repo rarebit-one/harness-kernel
+```
+
+**Arming is a separate, reversible act from releasing. Never edit the workflow
+to publish** — that is the anti-pattern the convention names, and it makes the
+armed state invisible and permanent.
+
+Do **not** publish, create a Release, or flip the repo public without explicit
+sign-off; the decision and what it actually requires are tracked in issue #33.
 
 ## CI
 
@@ -204,7 +227,7 @@ refactor.
 | `claude-code-review.yml` | non-draft PR | automated review, via the org-shared reusable |
 | `claude.yml` | `@claude` mention | agent responds on issues/PRs |
 | `dependabot-auto-merge.yml` | Dependabot PR | auto-lands green patch/minor bumps |
-| `publish.yml` | GitHub Release only | **dormant** — see below |
+| `publish.yml` | GitHub Release (any tag) | **INERT** — gated on `PUBLISH_LIVE`; see below |
 
 The three agentic/automation workflows are **thin callers** into
 `rarebit-one/.github` (public, so they keep working after a public flip). Model,

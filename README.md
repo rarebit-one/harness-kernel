@@ -18,8 +18,11 @@ kernel never knows an application exists; dependencies point **one way only**
 
 **v0 — private, unpublished.** The package is built OSS-ready (MIT licensed, npm
 OIDC trusted-publishing workflow wired) but the repo is private and nothing has
-been published to npm. `publish.yml` fires only on a GitHub Release, and no
-Release exists, so the publish path is dormant until the public flip.
+been published to npm. `publish.yml` fires on a GitHub Release for **any** tag,
+so it ships **inert**: the one mutating step is skipped unless the repo variable
+`PUBLISH_LIVE` is `"true"`, and an unarmed run reports what it would have
+published. "No Release exists yet" was never a safety property — it was an
+absence.
 
 v0 is a mechanical extraction of a proven, already-provider-neutral agent core
 into a standalone package — the mechanics are battle-tested, the packaging is
