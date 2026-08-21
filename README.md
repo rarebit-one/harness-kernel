@@ -16,13 +16,18 @@ kernel never knows an application exists; dependencies point **one way only**
 
 ## Status
 
-**v0 — private, unpublished.** The package is built OSS-ready (MIT licensed, npm
-OIDC trusted-publishing workflow wired) but the repo is private and nothing has
-been published to npm. `publish.yml` fires on a GitHub Release for **any** tag,
-so it ships **inert**: the one mutating step is skipped unless the repo variable
-`PUBLISH_LIVE` is `"true"`, and an unarmed run reports what it would have
-published. "No Release exists yet" was never a safety property — it was an
-absence.
+**v0 — public, published.** `@rarebit-one/harness-kernel` is on npm, MIT
+licensed. Install it the ordinary way:
+
+```bash
+npm install @rarebit-one/harness-kernel
+```
+
+Releases publish from `publish.yml` via npmjs **OIDC trusted publishing** — no
+token exists anywhere in this repo. The workflow ships **inert**: the mutating
+step is skipped unless the repo variable `PUBLISH_LIVE` is `"true"`, so a
+Release cut by accident is a loud no-op. Every version from `0.5.2` on carries a
+build provenance attestation.
 
 v0 is a mechanical extraction of a proven, already-provider-neutral agent core
 into a standalone package — the mechanics are battle-tested, the packaging is
