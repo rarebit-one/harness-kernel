@@ -156,68 +156,73 @@ Don't add tests that require a live provider key.
 - **Public API discipline.** A new export is a compatibility commitment. Add it
   to `src/index.ts` deliberately, not incidentally.
 
-## How consumers install it (while nothing is published)
+## How consumers install it
 
-Nothing is on npm yet. Consumers take a **vendored tarball**, not a git or
-registry dependency:
+`@rarebit-one/harness-kernel` is on npm, so the ordinary thing now works:
 
 ```jsonc
-"@rarebit-one/harness-kernel": "file:vendor/harness-kernel-0.5.0.tgz"
+"@rarebit-one/harness-kernel": "^0.5.2"
 ```
 
-Produced here with `npm pack` and committed into the consumer's `vendor/`.
+**Both in-estate consumers are still on a vendored tarball** — a `file:`
+dependency under `vendor/`, refreshed with `bin/refresh-kernel`. That was the
+right call while this repo was private, and the reasoning is settled: their
+production image builds without a `git` binary on purpose while `npm ci` runs
+several times, so a `github:` pin worked in CI and broke the deploy. **Don't
+reintroduce a git pin** — the full rationale lives in that consumer's own
+`CLAUDE.md` under "Why a tarball and not a git dependency (settled — don't
+re-litigate)".
 
-**A `github:` pin was evaluated and rejected downstream — don't reintroduce it.**
-The reason is not credentials (the release-bot App is installed here and mints a
-token fine); it is that a consumer's production image builds without a `git`
-binary on purpose, and `npm ci` runs several times during that build. The full
-rationale lives in that consumer's own `CLAUDE.md` under "Why a tarball and not
-a git dependency (settled — don't re-litigate)"; it is not restated here, because
-the consumer owns that decision — and because naming it here would breach the
-brand-neutrality rule above.
+Publishing was always the documented **exit** from vendoring, and it is now
+available. Worth moving on: a `file:` dependency has no semver range and no
+outdated signal — Dependabot cannot see it — which already let both consumers
+sit on `0.3.0` while `0.4.0` and `0.5.0` shipped, unnoticed. Tracked in
+`rarebit-one/jumpdrive-runner#93` and `sidekick-labs/ai-foundations-brain#855`.
 
-What this repo still owes them is a **truthful version**. Bump with
+What this repo owes them either way is a **truthful version**. Bump with
 `npm version <v> --no-git-tag-version` — **never** a find-and-replace over
-`package-lock.json`, which will happily rewrite an unrelated dependency that
-happens to sit at the same number (caught doing exactly that to `type-check`
-while cutting 0.5.0). Then merge,
-then tag the merge commit `v<version>` — the tag is the record of what a given
-tarball contains. Landing features without bumping is how `v0.3.0`, `main`'s
-`0.3.0` and two vendored `0.3.0.tgz` files came to be four different code states
-sharing one number.
+`package-lock.json`, which will happily rewrite an unrelated dependency sitting
+at the same number (caught doing exactly that to `type-check` while cutting
+0.5.0). Then merge, then tag the merge commit `v<version>`.
 
-## Publishing (INERT, not merely unused)
+## Publishing (LIVE, and inert by default)
 
-The repo is **private** and **nothing has been published**. `publish.yml` is
-wired for npmjs **OIDC trusted publishing** (`id-token: write`, `environment:
-npm`, build provenance attestation, **no `NPM_TOKEN`**).
+`@rarebit-one/harness-kernel` is **published on npm** and this repo is
+**public**. Publishing runs from `publish.yml` via npmjs **OIDC trusted
+publishing** — `id-token: write`, `environment: npm`, provenance attestation,
+and **no `NPM_TOKEN` anywhere**.
 
-**Creating a GitHub Release for ANY tag runs this workflow** — including
-backfilling an old tag to tidy up the tag list. Until 2026-08-21 the only thing
-preventing a public npm publish of this private codebase was that no Release
-happened to exist, which is an absence rather than a safety property, and the
-first mistake would have been the irreversible one (npm unpublish is refused
-once anything depends on the package).
-
-So the actuator ships **inert**, per the workspace `actuator-arming` convention.
-Every gate below — typecheck, lint, test, build, the `.d.ts` emit check, version
-consistency, provenance — runs on a Release exactly as before, against real
-inputs. The single **mutating** step is skipped unless the repo variable
-`PUBLISH_LIVE` is `"true"`, and an unarmed run prints what it *would* have
-published. A Release cut by accident is a loud green no-op.
+**Creating a GitHub Release for ANY tag runs this workflow.** The single
+mutating step is skipped unless the repo variable `PUBLISH_LIVE` is `"true"`;
+everything else — typecheck, lint, test, build, `.d.ts` emit, version
+consistency, provenance — runs regardless, and an unarmed run prints what it
+*would* have published. So a Release cut by accident is a loud green no-op.
 
 ```bash
 gh variable set PUBLISH_LIVE --body true --repo rarebit-one/harness-kernel
-# cut the Release
-gh variable delete PUBLISH_LIVE --repo rarebit-one/harness-kernel
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "..."
+gh variable delete PUBLISH_LIVE --repo rarebit-one/harness-kernel   # ALWAYS
 ```
 
 **Arming is a separate, reversible act from releasing. Never edit the workflow
-to publish** — that is the anti-pattern the convention names, and it makes the
-armed state invisible and permanent.
+to publish** — that makes the armed state invisible and permanent.
 
-Do **not** publish, create a Release, or flip the repo public without explicit
-sign-off; the decision and what it actually requires are tracked in issue #33.
+### Two things learned bootstrapping this (2026-08-21)
+
+**npm cannot make a FIRST publish via OIDC.** A trusted publisher can only be
+configured on a package that already exists (npm/cli#8544 — PyPI allows
+pre-registration, npm does not). `0.5.1` was therefore published manually with
+`npm publish --no-provenance` and has **no attestation**; `0.5.2` was the first
+OIDC release and every version since carries one. If a sibling package ever
+needs bootstrapping, this is the sequence, not a bug to debug.
+
+**Going public STRANDS self-hosted CI.** Every org runner group sets
+`allows_public_repositories: false` — correct, since a public repo means fork
+PRs. This repo had `RUNNER_LABEL=hyperion`, so the moment it went public every
+job queued forever with **nothing red**. The fix was deleting the repo variable
+so `runs-on` falls through to the workflows' `|| 'ubuntu-latest'` fallback,
+which costs nothing: public repos get unlimited hosted minutes. **Any repo that
+goes public next needs the same variable removed, in the same breath.**
 
 ## CI
 
