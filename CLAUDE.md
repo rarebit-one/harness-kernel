@@ -171,9 +171,10 @@ Produced here with `npm pack` and committed into the consumer's `vendor/`.
 The reason is not credentials (the release-bot App is installed here and mints a
 token fine); it is that a consumer's production image builds without a `git`
 binary on purpose, and `npm ci` runs several times during that build. The full
-rationale lives in `jumpdrive-runner`'s `CLAUDE.md` under "Why a tarball and not
+rationale lives in that consumer's own `CLAUDE.md` under "Why a tarball and not
 a git dependency (settled — don't re-litigate)"; it is not restated here, because
-the consumer owns that decision.
+the consumer owns that decision — and because naming it here would breach the
+brand-neutrality rule above.
 
 What this repo still owes them is a **truthful version**. Bump with
 `npm version <v> --no-git-tag-version` — **never** a find-and-replace over
