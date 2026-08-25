@@ -27,6 +27,7 @@ export { OpenAIProvider, OpenAICompatibleProvider } from "./providers/openai.js"
 export type { OpenAICompatibleOptions } from "./providers/openai.js"
 export { OpenRouterProvider } from "./providers/openrouter.js"
 export type { OpenRouterAttribution } from "./providers/openrouter.js"
+export { LocalProvider, LOCAL_DEFAULT_MODEL } from "./providers/local.js"
 export { MockProvider } from "./providers/mock.js"
 
 // ---------------------------------------------------------------------------

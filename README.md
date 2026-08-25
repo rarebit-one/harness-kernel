@@ -47,7 +47,7 @@ ESM-only, Node >= 22.
 | Area | Exports |
 |------|---------|
 | **Model seam** | `ModelInvocation` — one arrow for every model kind, with declared capabilities, a uniform result envelope and `probe()` |
-| **Providers** | `Provider` interface + `selectProvider()` over Anthropic, OpenAI, OpenRouter, and an offline `mock`; `chatModel()` puts any of them on the seam |
+| **Providers** | `Provider` interface + `selectProvider()` over Anthropic, OpenAI, OpenRouter, a self-hosted `local` (any OpenAI-compatible server), and an offline `mock`; `chatModel()` puts any of them on the seam |
 | **Agent loop** | `runAgent()` — a provider-neutral tool-use loop with step and wall-clock budgets |
 | **Loop** | `Loop` + `nativeLoop` — the control loop as a seam; the kernel ships one and it is the loop `runAgent` has always run |
 | **Run events** | `RunEvent` — an ordered, structured account of a run (turns, tool calls, budgets, outcome), emitted to an optional sink |
@@ -224,6 +224,16 @@ const text = await runAgent({
 With no provider API key configured, `selectProvider` falls back to the offline
 `mock` provider — so the whole loop runs end to end with no keys and no network.
 That is deliberate: the test suite depends on it, and so can yours.
+
+**Self-hosted (`local`).** `selectProvider("local")` runs against any
+OpenAI-compatible server — llama-server, vLLM, LM Studio, Ollama's OpenAI
+endpoint — set `LOCAL_MODEL_BASE_URL` (required), and optionally `LOCAL_MODEL`
+and `LOCAL_MODEL_API_KEY` (a local server usually needs none; when absent no
+`Authorization` header is sent). Unlike the others, `local` **fails loud** when
+no base URL is configured rather than degrading to the mock — it is chosen to
+keep a run on private inference (e.g. jumpdrive-web's `data_class: pii`, which
+forces a run onto the org's designated model), so silently running it elsewhere
+would defeat the point.
 
 ### Engines
 
