@@ -76,8 +76,12 @@ export interface OpenAICompatibleOptions {
   model: string
   /** Alternate chat.completions endpoint (e.g. OpenRouter); omit for api.openai.com. */
   baseURL?: string
-  /** Extra headers sent on every request (e.g. OpenRouter attribution). */
-  defaultHeaders?: Record<string, string>
+  /**
+   * Extra headers sent on every request (e.g. OpenRouter attribution). A `null`
+   * value REMOVES a header the SDK would otherwise send — the local provider
+   * uses `{ Authorization: null }` to make a keyless request carry no auth.
+   */
+  defaultHeaders?: Record<string, string | null>
 }
 
 /**
