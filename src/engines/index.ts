@@ -1,6 +1,7 @@
 import { NativeEngine, type DomainToolFactory } from "./native.js"
 import { ClaudeCodeEngine, type CapabilityToolFactory } from "./claudeCode.js"
 import { CodexEngine } from "./codex.js"
+import { AcpEngine, EVE_AGENT } from "./acp.js"
 import type { AgentEngine } from "./types.js"
 
 export type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
@@ -45,6 +46,15 @@ export function selectEngine(name?: string | null, selection: EngineSelection = 
         )
       }
       return new CodexEngine(undefined, selection.capabilityServerScript)
+    }
+    case "eve": {
+      if (!selection.capabilityServerScript) {
+        throw new Error(
+          "the eve engine requires selection.capabilityServerScript — the capability surface is " +
+            "injected, and an external process cannot be handed one implicitly",
+        )
+      }
+      return new AcpEngine(EVE_AGENT, selection.capabilityServerScript)
     }
     default:
       return new NativeEngine(selection.domainTools ? { domainTools: selection.domainTools } : {})
