@@ -254,7 +254,7 @@ This repo lives in the `~/Workspace/rarebit-one/` workspace and follows its rule
 
 1. **Worktree-only writes.** File modifications in the main checkout are blocked
    by a committed PreToolUse hook (`.claude/settings.json` →
-   `.claude/hooks/enforce-worktree.sh`). Work in a worktree
+   `.agents/hooks/enforce-worktree.sh`). Work in a worktree
    (`git worktree add .worktrees/<name> -b <branch> origin/main`). Don't
    sidestep via Bash writes either.
 2. **Signed commits, always.** A committed hook (`enforce-signed-commits.sh`)
