@@ -63,22 +63,13 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-          # This job is pinned to `ubuntu-latest`, so today this expression
-          # always evaluates to 'npm' and the behaviour is UNCHANGED. It is
-          # written conditionally to pre-empt the open PR routing Publish to the
-          # homelab: the moment `runs-on` becomes `vars.RUNNER_LABEL_BROKER || vars.RUNNER_LABEL`, restoring
-          # the 735 MB npm cache over a ~25 Mbit link would add ~200s to the
-          # release path for content that already sits in that host's ~/.npm.
-          # See test.yml for the measurement.
-          cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
-          # An empty `cache` alone is NOT enough. setup-node v7 falls through to
-          # `package-manager-cache` (default TRUE), which auto-enables npm caching
-          # whenever package.json declares `packageManager` or
-          # `devEngines.packageManager` (src/main.ts L72-90, and the input's own
-          # description). No package.json here declares either today -- checked --
-          # so gating only `cache` would work by luck and would silently start
-          # caching again the day anyone or Dependabot adds that field. Gate both.
-          package-manager-cache: ${{ runner.environment == 'github-hosted' }}
+          # No npm cache on the publish path (zizmor cache-poisoning): a restored
+          # cache would feed packages into the job that holds id-token: write.
+          # `cache` is simply omitted; `package-manager-cache` must ALSO be false,
+          # because setup-node v7 auto-enables npm caching through it (default
+          # true) whenever package.json declares `packageManager` /
+          # `devEngines.packageManager` (src/main.ts L72-90).
+          package-manager-cache: false
           registry-url: "https://registry.npmjs.org"
 
       # `npm install -g` is safe on the self-hosted runner: setup-node puts node
