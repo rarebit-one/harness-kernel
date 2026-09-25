@@ -176,5 +176,5 @@ jobs:
             echo "To publish: set the repo variable PUBLISH_LIVE=true, re-run, then UNSET it."
             exit 0
           fi
-          echo "::notice::ARMED — publishing ${{ env.TARBALL }} via OIDC trusted publishing"
+          echo "::notice::ARMED — publishing ${TARBALL} via OIDC trusted publishing"
           npm publish
