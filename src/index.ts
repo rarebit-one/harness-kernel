@@ -121,6 +121,7 @@ export type {
   BudgetKind,
   RunStartedEvent,
   ModelTurnEvent,
+  ModelTurnFailedEvent,
   ToolCalledEvent,
   ToolSucceededEvent,
   ToolFailedEvent,

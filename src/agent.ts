@@ -304,7 +304,12 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
       events.emit({ type: "model.turn", step: stepsTaken, text: summary.text, toolCalls: [] })
       finalText = summary.text || lastAssistantText
     } catch (err) {
-      log(`final summary failed: ${err instanceof Error ? err.message : String(err)}`)
+      const error = err instanceof Error ? err.message : String(err)
+      log(`final summary failed: ${error}`)
+      // The stream must not be quieter than the log: without this, a
+      // `run.finished` whose text fell back to an earlier turn would look
+      // exactly like one whose summary succeeded.
+      events.emit({ type: "model.turn.failed", step: stepsTaken, phase: "summary", error })
       finalText = lastAssistantText
     }
   }
