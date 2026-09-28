@@ -394,6 +394,54 @@ describe("runAgent event stream", () => {
     expect(events[events.length - 1]).toMatchObject({ type: "run.finished" })
   })
 
+  it("emits model.turn.failed when the step-budget summary call fails", async () => {
+    const { sink, events } = recordRunEvents()
+    const logs: string[] = []
+    const provider: Provider = {
+      name: "summary-fails",
+      complete: async () => "",
+      converse: async (req: ConverseRequest): Promise<ConverseResult> => {
+        if (req.tools.length === 0) throw new Error("summary provider is down")
+        return { text: "again", toolCalls: [{ id: "t", name: "ok", input: {} }] }
+      },
+    }
+    const out = await runAgent({
+      provider,
+      system: "s",
+      userPrompt: "go",
+      tools: [okTool],
+      maxSteps: 2,
+      emit: sink,
+      log: (l) => logs.push(l),
+    })
+
+    // The run absorbs the failure and falls back to the last prose...
+    expect(out).toBe("again")
+    expect(logs.some((l) => l.includes("final summary failed: summary provider is down"))).toBe(
+      true,
+    )
+    // ...and the stream says so, rather than being quieter than the log.
+    const failed = events.filter((e) => e.type === "model.turn.failed")
+    expect(failed).toHaveLength(1)
+    expect(failed[0]).toMatchObject({
+      type: "model.turn.failed",
+      step: 2,
+      phase: "summary",
+      error: "summary provider is down",
+    })
+    // Only the two real turns: no fake empty model.turn for the failed call.
+    expect(events.filter((e) => e.type === "model.turn")).toHaveLength(2)
+    const types = events.map((e) => e.type)
+    expect(types.indexOf("model.turn.failed")).toBeGreaterThan(
+      types.indexOf("run.budget_exhausted"),
+    )
+    expect(events[events.length - 1]).toMatchObject({
+      type: "run.finished",
+      outcome: "steps_exhausted",
+      text: "again",
+    })
+  })
+
   it("reports tool output size in UTF-8 bytes, not UTF-16 code units", async () => {
     const { sink, events } = recordRunEvents()
     const emoji = "🐙🐙" // 4 UTF-16 code units, 8 UTF-8 bytes

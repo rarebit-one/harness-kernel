@@ -32,6 +32,7 @@
 export type RunEventType =
   | "run.started"
   | "model.turn"
+  | "model.turn.failed"
   | "tool.called"
   | "tool.succeeded"
   | "tool.failed"
@@ -75,6 +76,28 @@ export interface ModelTurnEvent extends RunEventBase {
   step: number
   text: string
   toolCalls: { id: string; name: string }[]
+}
+
+/**
+ * A model invocation failed and the loop **absorbed** it: the run carries on
+ * and will still close with its normal outcome. A model failure that is NOT
+ * absorbed propagates instead, and is recorded by `run.finished` with
+ * `outcome: "failed"` — so this event never precedes a crash, and a consumer
+ * never sees the same failure twice.
+ *
+ * Today the one absorbed call is the tools-free wrap-up the loop makes after
+ * the step budget runs out (`phase: "summary"`); on failure the run falls back
+ * to the last assistant prose. `phase` is there so that one emitter is explicit
+ * rather than implied, and so a future soft-failing call names itself instead
+ * of overloading this one. Without the event, the stream would be quieter than
+ * `log` in the one place they must agree: a `run.finished` whose text came from
+ * an earlier turn would be indistinguishable from a summary that succeeded.
+ */
+export interface ModelTurnFailedEvent extends RunEventBase {
+  type: "model.turn.failed"
+  step: number
+  phase: "summary"
+  error: string
 }
 
 /**
@@ -174,6 +197,7 @@ export interface RunFinishedEvent extends RunEventBase {
 export type RunEvent =
   | RunStartedEvent
   | ModelTurnEvent
+  | ModelTurnFailedEvent
   | ToolCalledEvent
   | ToolSucceededEvent
   | ToolFailedEvent
@@ -189,6 +213,7 @@ export type RunEventSink = (event: RunEvent) => void
 export type RunEventInput =
   | Omit<RunStartedEvent, keyof RunEventBase>
   | Omit<ModelTurnEvent, keyof RunEventBase>
+  | Omit<ModelTurnFailedEvent, keyof RunEventBase>
   | Omit<ToolCalledEvent, keyof RunEventBase>
   | Omit<ToolSucceededEvent, keyof RunEventBase>
   | Omit<ToolFailedEvent, keyof RunEventBase>

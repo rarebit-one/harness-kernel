@@ -171,6 +171,12 @@ threw and never returned a result, so any number there would be invented. The
 `model.turn` events already in the stream are the authoritative record of how
 far it got.
 
+A model call the loop **absorbs** rather than propagates emits
+`model.turn.failed` (with a `phase`). Today that is only the tools-free summary
+requested after the step budget runs out: if it fails, the run falls back to the
+last assistant prose and still finishes `steps_exhausted`, and the event is what
+tells a consumer the final text is not a summary.
+
 Engines take the same sink through `EngineContext`:
 
 ```ts
