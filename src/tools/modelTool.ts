@@ -1,6 +1,6 @@
 import type { InvokeContext, ModelInvocation, ModelResult } from "../models/types.js"
 import type { ToolMetadata } from "./metadata.js"
-import type { Tool, ToolOutput } from "./registry.js"
+import type { Tool, ToolContext, ToolOutput } from "./registry.js"
 
 /** How to turn one model invocation into a callable tool. */
 export interface ModelToolOptions<Req, Res> {
@@ -40,10 +40,19 @@ export function modelAsTool<Req, Res>(
 ): Tool {
   const project = options.toContent ?? ((result: ModelResult<Res>) => JSON.stringify(result.value))
 
-  const run = async (input: Record<string, unknown>): Promise<ToolOutput> => {
+  const run = async (
+    input: Record<string, unknown>,
+    toolCtx?: ToolContext,
+  ): Promise<ToolOutput> => {
+    // The run's signal (from the loop) and any signal bound at construction
+    // both cancel the call; either one firing is enough.
+    const signals = [context.signal, toolCtx?.signal].filter(
+      (s): s is AbortSignal => s !== undefined,
+    )
+    const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0]
     const ctx: InvokeContext = {
       log: context.log ?? (() => {}),
-      ...(context.signal ? { signal: context.signal } : {}),
+      ...(signal ? { signal } : {}),
       ...(context.correlationId ? { correlationId: context.correlationId } : {}),
       ...(context.budget ? { budget: context.budget } : {}),
     }
@@ -58,7 +67,7 @@ export function modelAsTool<Req, Res>(
       inputSchema: options.inputSchema,
     },
     ...(options.meta ? { meta: options.meta } : {}),
-    execute: async (input) => (await run(input)).content,
+    execute: async (input, toolCtx) => (await run(input, toolCtx)).content,
     executeStructured: run,
   }
 }

@@ -2,6 +2,8 @@ import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import type { McpServer } from "@zed-industries/agent-client-protocol"
+import type { RunOutcome } from "../events.js"
+import type { StoppedBy } from "../signals.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { CAPABILITY_SERVER_NAME } from "./capabilityMcp.js"
 import { connectorServers, type SerializableMcpServer } from "./connectorMcp.js"
@@ -54,6 +56,14 @@ export interface AcpOptions {
   maxDurationMs?: number
   /** Append a line to the run log (the driver surfaces the agent's stderr here). */
   log: (line: string) => void
+  /** The caller's cancel; the driver merges it with its own `maxDurationMs` timer. */
+  signal?: AbortSignal
+  /**
+   * How long the agent gets to answer `session/cancel` after a stop before its
+   * process is killed. Defaults to 5s. Bounds every stop, so a hung agent
+   * cannot keep a canceled or timed-out run alive.
+   */
+  cancelGraceMs?: number
 }
 
 /** Streaming callbacks the driver invokes as ACP `session/update`s arrive. */
@@ -68,6 +78,9 @@ export interface AcpClientEvents {
 export interface AcpOutcome {
   /** The ACP `stopReason` (`end_turn`, `cancelled`, `refusal`, …). */
   stopReason: string
+  /** Set when the driver stopped the turn itself: its own timer
+   *  (`"deadline"`) or the caller's signal (`"signal"`). */
+  stoppedBy?: StoppedBy
 }
 
 /** The injectable boundary to the ACP transport. Tests supply a fake. */
@@ -161,19 +174,27 @@ export class AcpEngine implements AgentEngine {
         ? { maxDurationMs: spec.limits.maxDurationMs }
         : {}),
       log: ctx.log,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     }
 
     ctx.log(`${this.name}: driving ACP agent in ${spec.workdir}`)
 
     const chunks: string[] = []
-    const outcome = await this.drive(options, {
-      onAssistantChunk: (text) => {
-        if (text) chunks.push(text)
-      },
-      onLog: (line) => {
-        if (line) ctx.log(`${this.name}: ${truncate(line, LOG_TRUNCATE)}`)
-      },
-    })
+    let outcome: AcpOutcome
+    try {
+      outcome = await this.drive(options, {
+        onAssistantChunk: (text) => {
+          if (text) chunks.push(text)
+        },
+        onLog: (line) => {
+          if (line) ctx.log(`${this.name}: ${truncate(line, LOG_TRUNCATE)}`)
+        },
+      })
+    } catch (err) {
+      // A driver that throws on the caller's abort was still canceled, not broken.
+      if (!ctx.signal?.aborted) throw err
+      outcome = { stopReason: "cancelled", stoppedBy: "signal" }
+    }
 
     if (outcome.stopReason && outcome.stopReason !== "end_turn") {
       ctx.log(`${this.name}: stopped (${outcome.stopReason})`)
@@ -196,7 +217,31 @@ export class AcpEngine implements AgentEngine {
     return {
       text: chunks.join("").trim() || "(no output)",
       ...(emissions !== undefined ? { emissions } : {}),
+      outcome: acpRunOutcome(outcome),
     }
+  }
+}
+
+/**
+ * Map an ACP turn's ending onto the run outcome vocabulary. Who stopped it
+ * wins when the driver knows (`stoppedBy`); otherwise the ACP `stopReason`
+ * decides. `max_turn_requests` is the agent's own step budget; `max_tokens`
+ * still produced an answer (truncated), so it stays `completed`; a `refusal`
+ * did not do the work, so it is `failed`. An agent-side `cancelled` with no
+ * known stopper is reported as `canceled`.
+ */
+export function acpRunOutcome(outcome: AcpOutcome): RunOutcome {
+  if (outcome.stoppedBy === "deadline") return "timed_out"
+  if (outcome.stoppedBy === "signal") return "canceled"
+  switch (outcome.stopReason) {
+    case "cancelled":
+      return "canceled"
+    case "max_turn_requests":
+      return "steps_exhausted"
+    case "refusal":
+      return "failed"
+    default:
+      return "completed"
   }
 }
 

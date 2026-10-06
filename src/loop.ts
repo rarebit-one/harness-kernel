@@ -21,6 +21,7 @@
  */
 
 import { runNativeLoop } from "./agent.js"
+import { isAbortError } from "./signals.js"
 import type { LoopEventEmitter, RunEventEmitter, RunOutcome } from "./events.js"
 import type { ChatModel } from "./models/chat.js"
 import type { Tool } from "./tools/registry.js"
@@ -62,6 +63,15 @@ export interface LoopRequest {
 export interface LoopContext {
   log: (line: string) => void
   events: LoopEventEmitter
+  /**
+   * The caller's cancellation signal. A loop should stop promptly when it
+   * fires and report `outcome: "canceled"` rather than throw; the native loop
+   * also threads it (merged with its own deadline) into every model call and
+   * every tool call. Absent means the caller cannot cancel.
+   */
+  signal?: AbortSignal
+  /** The run's id, when the caller has one; handed to tools on `ToolContext`. */
+  runId?: string
 }
 
 /**
@@ -71,6 +81,10 @@ export interface LoopContext {
 export interface RunContext {
   log: (line: string) => void
   events: RunEventEmitter
+  /** Passed through to the loop; see {@link LoopContext.signal}. */
+  signal?: AbortSignal
+  /** Passed through to the loop; see {@link LoopContext.runId}. */
+  runId?: string
 }
 
 /**
@@ -90,7 +104,9 @@ export interface LoopResult {
    * Why the run stopped. The native loop never *returns* `"failed"` — that path
    * throws, and the terminal event is emitted before the error propagates. The
    * value is in the union because a custom loop may legitimately choose to
-   * report a failure rather than throw one.
+   * report a failure rather than throw one. A caller abort or a deadline hit
+   * mid-call is NOT a failure: the native loop returns `"canceled"` or
+   * `"timed_out"` with the prose it had accumulated.
    */
   outcome: RunOutcome
 }
@@ -135,7 +151,11 @@ export const nativeLoop: Loop = {
  * On a throw it closes the stream with `outcome: "failed"` and then **rethrows
  * the original error, untouched**. This changes what is observed, never what is
  * thrown. `steps` and `text` are omitted on that path: the loop never returned
- * a result, so there is no honest value for them.
+ * a result, so there is no honest value for them. If the caller's signal had
+ * fired AND the throw is that abort (the signal's own reason, an error caused
+ * by it, or an `AbortError`/`TimeoutError`), it is recorded as `"canceled"` instead — a custom loop that
+ * throws on abort was still canceled, not broken — and still rethrown. A real
+ * bug that happens to throw after the abort is still `"failed"`.
  */
 export async function runWithEvents(
   loop: Loop,
@@ -155,7 +175,7 @@ export async function runWithEvents(
   } catch (err) {
     ctx.events.emit({
       type: "run.finished",
-      outcome: "failed",
+      outcome: isAbortError(err, ctx.signal) ? "canceled" : "failed",
       error: err instanceof Error ? err.message : String(err),
     })
     throw err

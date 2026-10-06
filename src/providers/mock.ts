@@ -1,4 +1,10 @@
-import type { CompletionRequest, ConverseRequest, ConverseResult, Provider } from "./types.js"
+import type {
+  CompletionRequest,
+  ConverseOptions,
+  ConverseRequest,
+  ConverseResult,
+  Provider,
+} from "./types.js"
 import type { ProviderSelection } from "./index.js"
 
 /**
@@ -82,13 +88,17 @@ export class MockProvider implements Provider {
 
   // The mock never calls tools, so the agent loop terminates after one turn. It
   // echoes which tools were available, which is handy when running offline.
-  async converse(req: ConverseRequest): Promise<ConverseResult> {
+  // It honours `signal` the way a real adapter does: an aborted call rejects
+  // with the signal's reason instead of returning a turn.
+  async converse(req: ConverseRequest, opts?: ConverseOptions): Promise<ConverseResult> {
+    opts?.signal?.throwIfAborted()
     const lastUser = [...req.messages].reverse().find((m) => m.role === "user")
     const prompt = lastUser && lastUser.role === "user" ? lastUser.text : ""
     const text = await this.complete({
       system: `${req.system}\n\nAvailable tools: ${req.tools.map((t) => t.name).join(", ") || "(none)"}`,
       prompt,
     })
+    opts?.signal?.throwIfAborted()
     return { text, toolCalls: [] }
   }
 }

@@ -17,6 +17,7 @@ export type {
   CompletionRequest,
   ConverseRequest,
   ConverseResult,
+  ConverseOptions,
   AgentMessage,
   ToolSpec,
   ToolCall,
@@ -118,6 +119,7 @@ export type {
   LoopEventInput,
   LoopEventEmitter,
   RunOutcome,
+  ToolReplay,
   BudgetKind,
   RunStartedEvent,
   ModelTurnEvent,
@@ -134,12 +136,13 @@ export type {
 // MCP connectors, rich metadata + projections, and models-as-tools
 // ---------------------------------------------------------------------------
 export { primitiveTools, connectorTools, executeTool } from "./tools/registry.js"
-export type { Tool, ToolOutput } from "./tools/registry.js"
+export type { Tool, ToolOutput, ToolContext } from "./tools/registry.js"
 export {
   selectTools,
   isToolVisible,
   toToolSpecs,
   toolsRequiringConfirmation,
+  replaySafeTools,
   undoToolFor,
 } from "./tools/metadata.js"
 export type {
@@ -167,7 +170,7 @@ export type { DownloadOptions } from "./primitives/download.js"
 // MCP connectors
 // ---------------------------------------------------------------------------
 export { connectMcp, MCP_CLIENT_NAME } from "./connectors/mcpClient.js"
-export type { McpConnection } from "./connectors/mcpClient.js"
+export type { McpConnection, McpCallOptions } from "./connectors/mcpClient.js"
 
 // ---------------------------------------------------------------------------
 // Engines — the pluggable-harness seam

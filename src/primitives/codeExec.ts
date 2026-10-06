@@ -10,6 +10,13 @@ export interface RunCodeOptions {
   timeoutMs?: number
   stdin?: string
   maxBuffer?: number
+  /**
+   * Cancels the command: on abort the WHOLE process group is killed (as on
+   * timeout) and the promise rejects once the child has exited — with the
+   * signal's reason when it is an `Error`, else an `Error` wrapping it. An
+   * already-aborted signal rejects without spawning anything.
+   */
+  signal?: AbortSignal
 }
 
 export interface RunCodeResult {
@@ -17,6 +24,14 @@ export interface RunCodeResult {
   stderr: string
   exitCode: number | null
   timedOut: boolean
+}
+
+/** The signal's reason as an `Error`, so a rejection always carries a message. */
+function abortError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason
+  if (reason instanceof Error) return reason
+  const detail = typeof reason === "string" ? `: ${reason}` : ""
+  return new Error(`run_code aborted${detail}`, { cause: reason })
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000
@@ -37,9 +52,15 @@ export function runCode(options: RunCodeOptions): Promise<RunCodeResult> {
     stdin,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxBuffer = DEFAULT_MAX_BUFFER,
+    signal,
   } = options
 
   return new Promise<RunCodeResult>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError(signal))
+      return
+    }
+
     // A minimal base env with the caller's env — including resolved secrets —
     // layered on top. We forward only non-secret runtime vars: PATH (so binaries
     // resolve) and HOME (so npm/tooling use a stable cache dir — `$HOME/.npm`
@@ -75,6 +96,20 @@ export function runCode(options: RunCodeOptions): Promise<RunCodeResult> {
       killTree()
     }, timeoutMs)
 
+    // An abort takes the same path as the timeout — kill the process GROUP, so
+    // a script's own children die with it — but settles as a rejection: the
+    // caller asked for the work to stop, so there is no result to report.
+    let aborted = false
+    const onAbort = (): void => {
+      aborted = true
+      killTree()
+    }
+    signal?.addEventListener("abort", onAbort, { once: true })
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", onAbort)
+    }
+
     child.stdout?.on("data", (c: Buffer) => {
       stdout = cap(stdout, c)
     })
@@ -85,15 +120,16 @@ export function runCode(options: RunCodeOptions): Promise<RunCodeResult> {
     child.on("error", (err) => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
+      cleanup()
       reject(err)
     })
 
     child.on("close", (code) => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
-      resolve({ stdout, stderr, exitCode: code, timedOut })
+      cleanup()
+      if (aborted && signal) reject(abortError(signal))
+      else resolve({ stdout, stderr, exitCode: code, timedOut })
     })
 
     if (stdin !== undefined) child.stdin?.write(stdin)

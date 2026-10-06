@@ -1,4 +1,4 @@
-import type { RunEventSink } from "../events.js"
+import type { RunEventSink, RunOutcome } from "../events.js"
 import type { ProviderSelection } from "../providers/index.js"
 import type { ConnectorConfig, Permissions, WorkflowDefinition } from "../types.js"
 
@@ -56,6 +56,13 @@ export interface EngineContext {
    * silently — the events it does emit are exact.
    */
   emit?: RunEventSink
+  /**
+   * Cancels the run. The native engine threads it through the loop to every
+   * model request and tool; the external engines merge it with their own
+   * wall-clock timers and stop their harness process. A canceled run resolves
+   * with whatever prose it had and `outcome: "canceled"` rather than rejecting.
+   */
+  signal?: AbortSignal
 }
 
 /**
@@ -80,6 +87,14 @@ export interface EngineResult {
   text: string
   /** Anything else the run produced, in the application's own shape. */
   emissions?: unknown
+  /**
+   * Why the run stopped, in the same vocabulary as `run.finished`. The native
+   * engine reports the loop's own outcome; an external engine maps its
+   * harness's ending onto it (its timer → `timed_out`, the caller's signal →
+   * `canceled`, a clean finish → `completed`, a harness-reported error →
+   * `failed`). Optional so an engine that cannot tell stays honest by omitting it.
+   */
+  outcome?: RunOutcome
 }
 
 /** The outcome of an engine's capability check for a given run. */

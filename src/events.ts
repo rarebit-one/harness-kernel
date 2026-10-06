@@ -28,6 +28,8 @@
  *     context providers.
  */
 
+import type { Usage } from "./models/types.js"
+
 /** Every event kind the loop emits. */
 export type RunEventType =
   | "run.started"
@@ -52,10 +54,25 @@ export interface RunEventBase {
   at: number
 }
 
-/** Why a run stopped. `failed` means the loop threw — the error propagates to
- *  the caller unchanged, but the stream is closed first so a persistent
- *  consumer can tell a crashed run from one that is still going. */
-export type RunOutcome = "completed" | "steps_exhausted" | "timed_out" | "failed"
+/**
+ * Why a run stopped. `failed` means the loop threw — the error propagates to
+ * the caller unchanged, but the stream is closed first so a persistent
+ * consumer can tell a crashed run from one that is still going.
+ *
+ * `canceled` means the CALLER aborted the run through its `signal`; it is kept
+ * apart from `timed_out` (the run's own wall-clock budget ran out) because the
+ * two call for different responses — one was asked for, the other was not. In
+ * the native loop both are clean stops that return the accumulated prose, never
+ * a throw.
+ */
+export type RunOutcome = "completed" | "steps_exhausted" | "timed_out" | "canceled" | "failed"
+
+/**
+ * Whether a tool's effect is safe to execute again after an interruption,
+ * copied from `ToolMetadata.replay`. Absent means the tool made no claim, which
+ * a resuming consumer must treat as `unsafe`.
+ */
+export type ToolReplay = "safe" | "unsafe"
 
 /** Which budget ran out. */
 export type BudgetKind = "steps" | "duration"
@@ -76,6 +93,9 @@ export interface ModelTurnEvent extends RunEventBase {
   step: number
   text: string
   toolCalls: { id: string; name: string }[]
+  /** What the turn cost, when the model reported it (`ModelResult.usage`).
+   *  Absent means "not reported", never "free". */
+  usage?: Usage
 }
 
 /**
@@ -127,6 +147,8 @@ export interface ToolCalledEvent extends RunEventBase {
   reversible?: boolean
   undoToolName?: string | null
   undoWindowSeconds?: number | null
+  /** The tool's declared `ToolMetadata.replay`, copied at call time. */
+  replay?: ToolReplay
 }
 
 /**
@@ -151,18 +173,21 @@ export interface ToolSucceededEvent extends RunEventBase {
   reversible?: boolean
   undoToolName?: string | null
   undoWindowSeconds?: number | null
+  /** The tool's declared `ToolMetadata.replay`, copied at call time. */
+  replay?: ToolReplay
 }
 
 /** A tool call did not produce a result. `unknown_tool` is separated from
  *  `threw` because they mean different things to a consumer: one is a model
  *  hallucinating a name, the other is a real effect that may have partially
- *  landed. */
+ *  landed. `aborted` is a tool stopped by the run's cancel or deadline — its
+ *  effect may also have partially landed, but the tool did not fail. */
 export interface ToolFailedEvent extends RunEventBase {
   type: "tool.failed"
   step: number
   callId: string
   name: string
-  reason: "threw" | "unknown_tool"
+  reason: "threw" | "unknown_tool" | "aborted"
   error: string
 }
 
@@ -190,7 +215,8 @@ export interface RunFinishedEvent extends RunEventBase {
   outcome: RunOutcome
   steps?: number
   text?: string
-  /** Present only when `outcome` is `failed`. */
+  /** Present when `outcome` is `failed`, and when a loop THREW on a caller
+   *  abort (`canceled` with the error that loop raised). */
   error?: string
 }
 

@@ -38,11 +38,25 @@ export interface ModelCaps {
   usage: boolean
 }
 
-/** Token accounting, for kinds billed per token. */
+/**
+ * Token accounting, for kinds billed per token.
+ *
+ * `inputTokens` is ALL input the model processed, cached or not, so
+ * `totalTokens === inputTokens + outputTokens` holds whatever the provider's
+ * cache did. The cache fields are a breakdown of `inputTokens`, never in
+ * addition to it: `cacheReadTokens` were served from a prompt cache,
+ * `cacheWriteTokens` were written to one. They are priced differently from
+ * uncached input, which is why they are split out; absent means the provider
+ * reported no cache activity (or no breakdown), not zero.
+ */
 export interface TokenUsage {
   inputTokens?: number
   outputTokens?: number
   totalTokens?: number
+  /** Input tokens read from a prompt cache — a subset of `inputTokens`. */
+  cacheReadTokens?: number
+  /** Input tokens written to a prompt cache — a subset of `inputTokens`. */
+  cacheWriteTokens?: number
 }
 
 /**

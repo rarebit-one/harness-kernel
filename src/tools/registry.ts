@@ -22,6 +22,24 @@ export interface ToolOutput {
   structured?: unknown
 }
 
+/**
+ * What the loop hands a tool alongside its input.
+ *
+ * `signal` fires when the run is canceled or its deadline passes; a tool that
+ * does real work (a subprocess, an HTTP call, a remote MCP call) should stop
+ * when it does. `callId` is the model's id for this call — the same id the
+ * `tool.called` event carries — so a tool can key an idempotency token or a log
+ * line to it. `runId` is present when the caller supplied one.
+ *
+ * Optional on both executors, so a tool written before this existed, and a
+ * caller that invokes a tool directly, keep working unchanged.
+ */
+export interface ToolContext {
+  signal: AbortSignal
+  callId: string
+  runId?: string
+}
+
 /** A tool the agent can call: its public spec plus a server-side executor. */
 export interface Tool {
   spec: ToolSpec
@@ -31,7 +49,7 @@ export interface Tool {
    * Execute and return the model-facing string. This is the required contract
    * every tool implements, and the only one the loop needs.
    */
-  execute(input: Record<string, unknown>): Promise<string>
+  execute(input: Record<string, unknown>, ctx?: ToolContext): Promise<string>
   /**
    * Optional richer executor. When present the loop calls this instead and
    * keeps the typed payload alongside the string; when absent nothing changes.
@@ -41,13 +59,17 @@ export interface Tool {
    * types `execute` as returning a plain `string`, and widening it to a union
    * would break them at the type level for a payload most tools never produce.
    */
-  executeStructured?(input: Record<string, unknown>): Promise<ToolOutput>
+  executeStructured?(input: Record<string, unknown>, ctx?: ToolContext): Promise<ToolOutput>
 }
 
-/** Run a tool through its richest available executor. */
-export async function executeTool(tool: Tool, input: Record<string, unknown>): Promise<ToolOutput> {
-  if (tool.executeStructured) return tool.executeStructured(input)
-  return { content: await tool.execute(input) }
+/** Run a tool through its richest available executor, handing it `ctx` when given. */
+export async function executeTool(
+  tool: Tool,
+  input: Record<string, unknown>,
+  ctx?: ToolContext,
+): Promise<ToolOutput> {
+  if (tool.executeStructured) return tool.executeStructured(input, ctx)
+  return { content: await tool.execute(input, ctx) }
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "")
@@ -100,22 +122,25 @@ export function primitiveTools(
           required: ["command"],
         },
       },
-      execute: async (input) => {
+      execute: async (input, ctx) => {
         const command = str(input.command)
         const args = strArray(input.args)
         const stdin = typeof input.stdin === "string" ? input.stdin : undefined
+        // An abort (run canceled or out of time) kills the whole process group.
+        const signal = ctx?.signal
         // Default to running the command line through a shell (mirrors the verify
         // gate's `/bin/sh -c`), so an agent can hand us `node scan.mjs` as a single
         // string. When explicit args are given, exec the binary directly (no shell).
         const result =
           args.length > 0
-            ? await runCode({ cwd: sandboxDir, command, args, env, stdin })
+            ? await runCode({ cwd: sandboxDir, command, args, env, stdin, signal })
             : await runCode({
                 cwd: sandboxDir,
                 command: "/bin/sh",
                 args: ["-c", command],
                 env,
                 stdin,
+                signal,
               })
         return JSON.stringify(result)
       },
@@ -158,13 +183,14 @@ export function primitiveTools(
           required: ["url"],
         },
       },
-      execute: async (input) => {
+      execute: async (input, ctx) => {
         const res = await httpFetch({
           url: str(input.url),
           method: str(input.method) || "GET",
           headers: stringHeaders(input.headers),
           body: typeof input.body === "string" ? input.body : undefined,
           allowHosts, // egress allowlist from the workflow's permissions (undefined = any public host)
+          signal: ctx?.signal,
         })
         return JSON.stringify({ status: res.status, body: res.body })
       },
@@ -182,8 +208,22 @@ export function primitiveTools(
 export async function connectorTools(
   connectors: ConnectorConfig[],
   connect: (config: ConnectorConfig) => Promise<McpConnection> = connectMcp,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<{ tools: Tool[]; close: () => Promise<void> }> {
+  const { signal } = opts
   const connections: McpConnection[] = []
+  // Each setup await stops waiting the moment `signal` aborts, so a stalled
+  // server cannot hold a canceled run; the catch below then closes every
+  // connection already open, and one still connecting is closed if it lands.
+  const step = <T>(work: Promise<T>): Promise<T> => {
+    if (!signal) return work
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = (): void => reject(signal.reason as Error)
+      if (signal.aborted) return onAbort()
+      signal.addEventListener("abort", onAbort, { once: true })
+      work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort))
+    })
+  }
   const tools: Tool[] = []
   const close = async (): Promise<void> => {
     await Promise.allSettled(connections.map((c) => c.close()))
@@ -193,10 +233,17 @@ export async function connectorTools(
     for (const config of connectors) {
       if (config.kind !== "mcp") continue
 
-      const conn = await connect(config)
+      const connecting = connect(config)
+      let conn: McpConnection
+      try {
+        conn = await step(connecting)
+      } catch (err) {
+        void connecting.then((late) => late.close()).catch(() => {})
+        throw err
+      }
       connections.push(conn)
 
-      const listed = (await conn.listTools()) as {
+      const listed = (await step(conn.listTools())) as {
         tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>
       }
 
@@ -207,8 +254,12 @@ export async function connectorTools(
             description: tool.description ?? `${config.name} tool ${tool.name}`,
             inputSchema: tool.inputSchema ?? { type: "object" },
           },
-          execute: async (input) => {
-            const result = await conn.callTool(tool.name, input)
+          execute: async (input, ctx) => {
+            // The signal reaches the MCP request, which sends the server a
+            // cancellation notification instead of leaving the call running.
+            const result = ctx
+              ? await conn.callTool(tool.name, input, { signal: ctx.signal })
+              : await conn.callTool(tool.name, input)
             return JSON.stringify(result)
           },
         })

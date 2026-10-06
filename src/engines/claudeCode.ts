@@ -1,3 +1,5 @@
+import type { RunOutcome } from "../events.js"
+import { harnessOutcome, type StoppedBy } from "../signals.js"
 import type { ConnectorConfig } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { defaultClaudeCodeDriver } from "./claudeCodeDriver.js"
@@ -27,11 +29,21 @@ export interface ClaudeCodeOptions {
   /** The run's external MCP connectors; the driver mounts them as SDK mcpServers so
    *  they become tools inside Claude Code (parity with the native engine). */
   connectors?: ConnectorConfig[]
+  /** The caller's cancel; the driver merges it with its own `maxDurationMs` timer. */
+  signal?: AbortSignal
 }
 
 /** A normalized message from the harness (driver-agnostic). */
 export type ClaudeCodeMessage =
-  { kind: "assistant"; text: string } | { kind: "result"; text: string; isError: boolean }
+  | { kind: "assistant"; text: string }
+  | {
+      kind: "result"
+      text: string
+      isError: boolean
+      /** Set when the driver stopped the harness early: its own timer
+       *  (`"deadline"`) or the caller's signal (`"signal"`). */
+      stoppedBy?: StoppedBy
+    }
 
 /**
  * The injectable boundary to the Claude Code harness: given mapped options, yield
@@ -124,22 +136,41 @@ export class ClaudeCodeEngine implements AgentEngine {
       ...(spec.limits?.maxDurationMs !== undefined
         ? { maxDurationMs: spec.limits.maxDurationMs }
         : {}),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     }
 
     ctx.log(`claude-code: driving model ${model} in ${spec.workdir}`)
 
     let finalText = ""
+    let lastAssistantText = ""
+    let outcome: RunOutcome = "completed"
 
-    for await (const message of this.drive(options)) {
-      if (message.kind === "assistant") {
-        if (message.text) ctx.log(`claude-code: ${truncate(message.text, LOG_TRUNCATE)}`)
-      } else {
-        finalText = message.text
-        if (message.isError) ctx.log("claude-code: harness reported an error")
+    try {
+      for await (const message of this.drive(options)) {
+        if (message.kind === "assistant") {
+          if (message.text) {
+            lastAssistantText = message.text
+            ctx.log(`claude-code: ${truncate(message.text, LOG_TRUNCATE)}`)
+          }
+        } else {
+          finalText = message.text
+          outcome = harnessOutcome(message.isError, message.stoppedBy)
+          if (message.stoppedBy) ctx.log(`claude-code: stopped (${outcome})`)
+          else if (message.isError) ctx.log("claude-code: harness reported an error")
+        }
       }
+    } catch (err) {
+      // A driver that throws on the caller's abort was still canceled, not broken.
+      if (!ctx.signal?.aborted) throw err
+      outcome = "canceled"
+      ctx.log("claude-code: stopped (canceled)")
     }
 
-    return { text: finalText || "(no output)" }
+    const stopped = outcome === "canceled" || outcome === "timed_out"
+    return {
+      text: finalText || (stopped ? lastAssistantText : "") || "(no output)",
+      outcome,
+    }
   }
 }
 

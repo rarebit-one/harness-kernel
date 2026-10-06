@@ -1,3 +1,5 @@
+import type { TokenUsage } from "../models/types.js"
+
 export interface CompletionRequest {
   system: string
   prompt: string
@@ -48,12 +50,32 @@ export interface ConverseResult {
   text: string
   /** Tools the model wants run; empty means the turn is final. */
   toolCalls: ToolCall[]
+  /** Token accounting for this call, when the provider's API reports it. */
+  usage?: TokenUsage
+}
+
+/**
+ * Per-call options for {@link Provider.converse}.
+ *
+ * `signal` aborts the in-flight HTTP request rather than waiting it out: the
+ * SDK-backed adapters hand it to the SDK as a per-request option, so a caller
+ * cancel (or the loop's own deadline) stops a long generation mid-flight. A
+ * provider that cannot honour it should still check it before starting.
+ */
+export interface ConverseOptions {
+  signal?: AbortSignal
 }
 
 export interface Provider {
   readonly name: string
+  /**
+   * True when `converse` always populates `ConverseResult.usage`. `chatModel`
+   * declares `caps.usage` from this, so a provider that reports nothing (the
+   * mock, most custom providers) never advertises usage it will not deliver.
+   */
+  readonly reportsUsage?: boolean
   /** One-shot completion (no tools) — kept for simple callers. */
   complete(req: CompletionRequest): Promise<string>
   /** One step of a tool-use conversation; the agent loop drives the rest. */
-  converse(req: ConverseRequest): Promise<ConverseResult>
+  converse(req: ConverseRequest, opts?: ConverseOptions): Promise<ConverseResult>
 }

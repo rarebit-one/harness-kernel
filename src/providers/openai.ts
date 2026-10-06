@@ -1,8 +1,10 @@
 import OpenAI from "openai"
+import type { TokenUsage } from "../models/types.js"
 import { maxTokens, providerMaxRetries, providerTimeoutMs } from "./clientOptions.js"
 import type {
   AgentMessage,
   CompletionRequest,
+  ConverseOptions,
   ConverseRequest,
   ConverseResult,
   Provider,
@@ -59,6 +61,25 @@ export function parseOpenAIMessage(
   return { text, toolCalls }
 }
 
+/**
+ * Map an OpenAI `usage` block to the kernel's token accounting (pure; tested).
+ * `prompt_tokens` already includes cached input, so it maps to `inputTokens`
+ * as-is and `cached_tokens` is the cache-read breakdown. OpenAI's automatic
+ * caching reports no separate write count.
+ */
+export function openAIUsage(
+  usage: OpenAI.Completions.CompletionUsage | null | undefined,
+): TokenUsage | undefined {
+  if (!usage) return undefined
+  const cached = usage.prompt_tokens_details?.cached_tokens ?? 0
+  return {
+    inputTokens: usage.prompt_tokens,
+    outputTokens: usage.completion_tokens,
+    totalTokens: usage.total_tokens,
+    ...(cached > 0 ? { cacheReadTokens: cached } : {}),
+  }
+}
+
 /** Parse a tool-call arguments JSON string, tolerating empty/invalid input. */
 function parseArguments(raw: string): Record<string, unknown> {
   if (!raw) return {}
@@ -91,6 +112,7 @@ export interface OpenAICompatibleOptions {
  */
 export class OpenAICompatibleProvider implements Provider {
   readonly name: string
+  readonly reportsUsage = true
   private client: OpenAI
   private model: string
 
@@ -122,22 +144,27 @@ export class OpenAICompatibleProvider implements Provider {
     return completion.choices[0]?.message?.content ?? ""
   }
 
-  async converse(req: ConverseRequest): Promise<ConverseResult> {
+  async converse(req: ConverseRequest, opts?: ConverseOptions): Promise<ConverseResult> {
     const tools = req.tools.map((t): OpenAI.Chat.Completions.ChatCompletionTool => ({
       type: "function",
       function: { name: t.name, description: t.description, parameters: t.inputSchema },
     }))
 
-    const completion = await this.client.chat.completions.create({
-      model: this.model,
-      max_tokens: maxTokens(), // match AnthropicProvider rather than the model default
-      messages: [{ role: "system", content: req.system }, ...toOpenAIMessages(req.messages)],
-      ...(tools.length > 0 ? { tools } : {}),
-    })
+    const completion = await this.client.chat.completions.create(
+      {
+        model: this.model,
+        max_tokens: maxTokens(), // match AnthropicProvider rather than the model default
+        messages: [{ role: "system", content: req.system }, ...toOpenAIMessages(req.messages)],
+        ...(tools.length > 0 ? { tools } : {}),
+      },
+      // Per-request, so an abort cancels THIS call (retries included).
+      opts?.signal ? { signal: opts.signal } : undefined,
+    )
 
+    const usage = openAIUsage(completion.usage)
     const message = completion.choices[0]?.message
-    if (!message) return { text: "", toolCalls: [] }
-    return parseOpenAIMessage(message)
+    const parsed = message ? parseOpenAIMessage(message) : { text: "", toolCalls: [] }
+    return { ...parsed, ...(usage ? { usage } : {}) }
   }
 }
 

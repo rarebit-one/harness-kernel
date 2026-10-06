@@ -38,6 +38,12 @@ export interface HttpFetchOptions {
   lookup?: Lookup
   /** `fetch` implementation (defaults to undici's `fetch`); injectable for tests. */
   fetchImpl?: FetchImpl
+  /**
+   * Cancels the request. Merged with the per-hop timeout controller, so it
+   * aborts the header wait, a redirect hop and the body read alike; an abort
+   * surfaces as `http aborted`, distinct from `http timeout`.
+   */
+  signal?: AbortSignal
 }
 
 export interface HttpResponse {
@@ -166,6 +172,8 @@ interface TimedFetch {
   controller: AbortController
   /** True once the timeout fired — lets the body reader report a clear timeout. */
   timedOut: () => boolean
+  /** True once the caller's signal fired — reported as an abort, not a timeout. */
+  aborted: () => boolean
   /** Stops the timer and closes the pinned dispatcher once the body is read/abandoned. */
   done: () => void
 }
@@ -187,16 +195,32 @@ async function fetchWithTimeout(
   init: Parameters<FetchImpl>[1],
   records: ValidatedRecords,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<TimedFetch> {
+  // Same error whether the signal fired before this hop or during it.
+  if (signal?.aborted) throw new Error(`http aborted: ${target}`, { cause: signal.reason })
   const controller = new AbortController()
   const agent = pinnedAgent(records)
   let timedOut = false
+  let aborted = false
   const timer = setTimeout(() => {
     timedOut = true
     controller.abort()
   }, timeoutMs)
+  // The caller's signal drives the SAME controller as the timeout, so whatever
+  // the timeout bounds (headers and the streamed body) an abort bounds too.
+  const onAbort = (): void => {
+    aborted = true
+    controller.abort(signal?.reason)
+  }
+  signal?.addEventListener("abort", onAbort, { once: true })
   const closeAgent = () => {
     void agent.close().catch(() => {})
+  }
+  const release = (): void => {
+    clearTimeout(timer)
+    signal?.removeEventListener("abort", onAbort)
+    closeAgent()
   }
   try {
     const res = await fetchImpl(target, { ...init, signal: controller.signal, dispatcher: agent })
@@ -204,14 +228,12 @@ async function fetchWithTimeout(
       res,
       controller,
       timedOut: () => timedOut,
-      done: () => {
-        clearTimeout(timer)
-        closeAgent()
-      },
+      aborted: () => aborted,
+      done: release,
     }
   } catch (err) {
-    clearTimeout(timer)
-    closeAgent()
+    release()
+    if (aborted) throw new Error(`http aborted: ${target}`, { cause: err })
     if (timedOut) {
       throw new Error(`http timeout after ${timeoutMs}ms: ${target}`, { cause: err })
     }
@@ -248,6 +270,7 @@ export async function httpFetch(options: HttpFetchOptions): Promise<HttpResponse
     timeoutMs = defaultTimeoutMs(),
     lookup = defaultLookup,
     fetchImpl = undiciFetch,
+    signal,
   } = options
 
   const assertSafe = (target: string): Promise<ValidatedRecords> =>
@@ -261,6 +284,7 @@ export async function httpFetch(options: HttpFetchOptions): Promise<HttpResponse
     { method, headers, body, redirect: "manual" },
     records,
     timeoutMs,
+    signal,
   )
 
   let hops = 0
@@ -279,6 +303,7 @@ export async function httpFetch(options: HttpFetchOptions): Promise<HttpResponse
       { method, headers, redirect: "manual" },
       records,
       timeoutMs,
+      signal,
     )
     hops += 1
   }
@@ -304,7 +329,7 @@ export async function httpFetch(options: HttpFetchOptions): Promise<HttpResponse
  * sends headers then drip-feeds the body still can't stall the run.
  */
 async function readBodyCapped(hop: TimedFetch, target: string, maxBytes: number): Promise<string> {
-  const { res, controller, timedOut, done } = hop
+  const { res, controller, timedOut, aborted, done } = hop
   try {
     if (!res.body) return await res.text()
 
@@ -327,6 +352,7 @@ async function readBodyCapped(hop: TimedFetch, target: string, maxBytes: number)
     } catch (err) {
       // The timer aborts the controller, which surfaces here as an abort/read
       // error — translate it to the same clear timeout message as the header phase.
+      if (aborted()) throw new Error(`http aborted: ${target}`, { cause: err })
       if (timedOut() || controller.signal.aborted) {
         throw new Error(`http timeout: ${target}`, { cause: err })
       }
