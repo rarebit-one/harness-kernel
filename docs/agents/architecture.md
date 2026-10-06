@@ -25,7 +25,8 @@ around — the kernel never bends to a consumer.
 | `src/events.ts` | `RunEvent` + `runEventEmitter` / `recordRunEvents` — the structured run stream the loop and `EngineContext` emit |
 | `src/tools/` | `Tool` + `primitiveTools` (generic) / `connectorTools`; `metadata.ts` (scoping + projections); `modelTool.ts` (a model surfaced as a tool). Domain tools are the application's, injected via `DomainToolFactory`. |
 | `src/primitives/` | Sandbox primitives: `codeExec`, `fs`, `http`, `download` |
-| `src/engines/` | The `AgentEngine` seam + native / claude-code / codex harnesses; the capability *mechanism* (guards, `write_file`, MCP + stdio transports) — never an application's capability set |
+| `src/engines/` | The `AgentEngine` seam + native / claude-code / codex / ACP (eve) harnesses; the capability *mechanism* (guards, `write_file`, MCP + stdio transports) — never an application's capability set |
+| `src/signals.ts` | Internal: the caller's cancel merged with a wall-clock deadline (`deadlineSignal`, `runStop`), and the harness-ending → `RunOutcome` map |
 | `src/secrets.ts` | `secretsToEnv` |
 
 ## The seven extension points
@@ -39,10 +40,21 @@ a tool, or a control loop.
 | 1 | **Model kinds** | `ModelRegistry` | binds `kind`+`id` → `ModelInvocation`; fails loud when unresolved |
 | 2 | **Route resolution** | `RouteResolver` | `StaticRouteResolver` (code/config, zero infrastructure) |
 | 3 | **Middleware** | `Middleware` | correlation, logging, health tracking, error redaction |
-| 4 | **Engines** | `AgentEngine` | native / claude-code / codex |
+| 4 | **Engines** | `AgentEngine` | native / claude-code / codex / ACP (`eve`, selected via `selectEngine`); `EngineContext.signal` cancels, `EngineResult.outcome` reports why it stopped |
 | 5 | **Context providers** | `ContextProvider` | parallel assembly + rendering; wired into `NativeEngine` |
-| 6 | **Tools** | `Tool` + `ToolMetadata` | primitives, MCP connectors, projections, `modelAsTool`; domain tools + capabilities are injected |
-| 7 | **Loop** | `Loop` | `nativeLoop` — the one loop the kernel ships, which `runAgent` also runs |
+| 6 | **Tools** | `Tool` + `ToolMetadata` | primitives, MCP connectors, projections (incl. `replaySafeTools`), `modelAsTool`; each call gets a `ToolContext` (`signal`, `callId`, `runId?`); domain tools + capabilities are injected |
+| 7 | **Loop** | `Loop` | `nativeLoop` — the one loop the kernel ships, which `runAgent` also runs; `LoopContext.signal` cancels it |
+
+**Cancellation is one signal, threaded end to end.** A caller's `signal`
+(`RunAgentOptions`, `EngineContext`, `LoopContext`) is merged in
+`runNativeLoop` with `AbortSignal.timeout(maxDurationMs)` and set as the
+existing `InvokeContext.signal`, so it reaches `Provider.converse(req, {signal})`
+(the SDK's per-request option) and every tool via `ToolContext`. An abort is a
+clean stop, never a throw: the loop returns the accumulated prose with
+`outcome: "canceled"` (caller) or `"timed_out"` (deadline), told apart by
+`signal.reason`, and skips the summary call. The external engines merge the
+same signal with their own timers and map their harness's ending onto
+`EngineResult.outcome`.
 
 **Points 1 and 2 are different layers and must not be conflated.** A resolver
 answers "which model, prompt and tools should capability X use?" and hands back

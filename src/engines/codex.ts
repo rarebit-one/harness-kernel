@@ -1,6 +1,8 @@
 import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import type { RunOutcome } from "../events.js"
+import { harnessOutcome, type StoppedBy } from "../signals.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { CAPABILITY_SERVER_NAME } from "./capabilityMcp.js"
 import { connectorServers, writeCodexConfig, type SerializableMcpServer } from "./connectorMcp.js"
@@ -36,11 +38,27 @@ export interface CodexOptions {
   capabilityEnv: Record<string, string>
   /** Wall-clock budget in ms; undefined means no engine-imposed limit. */
   maxDurationMs?: number
+  /** The caller's cancel; the driver merges it with its own `maxDurationMs` timer. */
+  signal?: AbortSignal
+  /**
+   * After a stop, how long codex's process group gets to exit on SIGTERM
+   * before it is SIGKILLed. Defaults to 5s. The driver does not return until
+   * the group is gone, so a stopped run cannot keep mutating the workspace.
+   */
+  cancelGraceMs?: number
 }
 
 /** A normalized message from the harness (driver-agnostic). */
 export type CodexMessage =
-  { kind: "assistant"; text: string } | { kind: "result"; text: string; isError: boolean }
+  | { kind: "assistant"; text: string }
+  | {
+      kind: "result"
+      text: string
+      isError: boolean
+      /** Set when the driver stopped codex early: its own timer (`"deadline"`)
+       *  or the caller's signal (`"signal"`). */
+      stoppedBy?: StoppedBy
+    }
 
 /** The injectable boundary to the codex harness. Tests supply a fake. */
 export type CodexDriver = (opts: CodexOptions) => AsyncIterable<CodexMessage>
@@ -145,20 +163,29 @@ export class CodexEngine implements AgentEngine {
       ...(spec.limits?.maxDurationMs !== undefined
         ? { maxDurationMs: spec.limits.maxDurationMs }
         : {}),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     }
 
     ctx.log(`codex: driving model ${model} in ${spec.workdir}`)
 
     let finalText = ""
+    let outcome: RunOutcome = "completed"
     try {
       for await (const message of this.drive(options)) {
         if (message.kind === "assistant") {
           if (message.text) ctx.log(`codex: ${truncate(message.text, LOG_TRUNCATE)}`)
         } else {
           finalText = message.text
-          if (message.isError) ctx.log("codex: harness reported an error")
+          outcome = harnessOutcome(message.isError, message.stoppedBy)
+          if (message.stoppedBy) ctx.log(`codex: stopped (${outcome})`)
+          else if (message.isError) ctx.log("codex: harness reported an error")
         }
       }
+    } catch (err) {
+      // A driver that throws on the caller's abort was still canceled, not broken.
+      if (!ctx.signal?.aborted) throw err
+      outcome = "canceled"
+      ctx.log("codex: stopped (canceled)")
     } finally {
       // The token-bearing config is transient — never let it linger.
       await rm(codexHome, { recursive: true, force: true })
@@ -187,6 +214,7 @@ export class CodexEngine implements AgentEngine {
     return {
       text: finalText || "(no output)",
       ...(emissions !== undefined ? { emissions } : {}),
+      outcome,
     }
   }
 }

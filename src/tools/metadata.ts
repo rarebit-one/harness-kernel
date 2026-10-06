@@ -39,8 +39,9 @@ export type ClientResultVisibility = "full" | "suppressed"
 
 /**
  * Optional descriptive metadata on a {@link Tool}. Every field is optional and
- * an absent field always means "no restriction", so a tool that declares no
- * metadata behaves exactly as it did before this existed.
+ * an absent field means "no restriction" — except `replay`, where absent means
+ * `"unsafe"` (see the field). A tool that declares no metadata behaves exactly
+ * as it did before this existed.
  */
 export interface ToolMetadata {
   /** Human-facing label, where a UI wants something friendlier than `name`. */
@@ -65,6 +66,16 @@ export interface ToolMetadata {
   undoToolName?: string | null
   /** How long undo stays available. */
   undoWindowSeconds?: number | null
+  /**
+   * Whether the tool may be executed again after an interruption — e.g. when
+   * a run is resumed and this call was in flight. `"safe"` declares the effect
+   * idempotent (a read, or a write keyed so a repeat is a no-op); `"unsafe"`
+   * declares it is not. **Absent means unsafe**: this is the one field where
+   * "no claim" is NOT "no restriction", because re-running an effect nobody
+   * vouched for is exactly the failure a replay consumer must avoid. The
+   * kernel only records the claim; deciding to replay is the application's.
+   */
+  replay?: "safe" | "unsafe"
   resultRetention?: ResultRetention
   clientResultVisibility?: ClientResultVisibility
 }
@@ -122,6 +133,14 @@ export function toToolSpecs(tools: Tool[]): ToolSpec[] {
 /** Tools that must not execute until a human has approved them. */
 export function toolsRequiringConfirmation(tools: Tool[]): Tool[] {
   return tools.filter((tool) => tool.meta?.requiresConfirmation === true)
+}
+
+/**
+ * Tools that declared `replay: "safe"` — the only ones a consumer may re-run
+ * after an interruption. An undeclared tool is excluded: absent means unsafe.
+ */
+export function replaySafeTools(tools: Tool[]): Tool[] {
+  return tools.filter((tool) => tool.meta?.replay === "safe")
 }
 
 /** Look up the tool that undoes `name`, when one is declared and reversible. */

@@ -31,8 +31,7 @@ build provenance attestation.
 
 v0 is a mechanical extraction of a proven, already-provider-neutral agent core
 into a standalone package — the mechanics are battle-tested, the packaging is
-new. Seam-widening (a general `ModelInvocation` seam, streaming, multimodal
-input, middleware, context providers) is planned as an additive v0.2.
+new.
 
 ## Install
 
@@ -48,12 +47,12 @@ ESM-only, Node >= 22.
 |------|---------|
 | **Model seam** | `ModelInvocation` — one arrow for every model kind, with declared capabilities, a uniform result envelope and `probe()` |
 | **Providers** | `Provider` interface + `selectProvider()` over Anthropic, OpenAI, OpenRouter, a self-hosted `local` (any OpenAI-compatible server), and an offline `mock`; `chatModel()` puts any of them on the seam |
-| **Agent loop** | `runAgent()` — a provider-neutral tool-use loop with step and wall-clock budgets |
+| **Agent loop** | `runAgent()` — a provider-neutral tool-use loop with step and wall-clock budgets, cancellable through an `AbortSignal` |
 | **Loop** | `Loop` + `nativeLoop` — the control loop as a seam; the kernel ships one and it is the loop `runAgent` has always run |
 | **Run events** | `RunEvent` — an ordered, structured account of a run (turns, tool calls, budgets, outcome), emitted to an optional sink |
-| **Tools** | `Tool`, `primitiveTools()` (`run_code`, `read_file`, `list_files`, `http_fetch`), `connectorTools()`, `modelAsTool()`, metadata + projections |
+| **Tools** | `Tool` (+ `ToolContext`), `primitiveTools()` (`run_code`, `read_file`, `list_files`, `http_fetch`), `connectorTools()`, `modelAsTool()`, metadata + projections (`replaySafeTools`, …) |
 | **Connectors** | `connectMcp()` — MCP clients over stdio / streamable HTTP / SSE |
-| **Engines** | The `AgentEngine` seam + `native`, `claude-code`, and `codex` harnesses, plus the capability *mechanism* (scope guards, a generic `write_file`, and MCP/stdio transports) — the capability *set* is yours to inject |
+| **Engines** | The `AgentEngine` seam + `native`, `claude-code`, `codex`, and ACP (`eve`) harnesses, plus the capability *mechanism* (scope guards, a generic `write_file`, and MCP/stdio transports) — the capability *set* is yours to inject |
 | **Routing** | `RouteResolver` + `StaticRouteResolver` — capability → model, prompt, tools |
 | **Context** | `ContextProvider` chain, assembled in parallel and rendered into the prompt |
 | **Secrets** | `secretsToEnv()` — resolved secret values into an exec environment |
@@ -102,8 +101,8 @@ const model = registry.resolve(route.model) // the resolver picks, the registry 
 const model = withMiddleware(anyModel, [correlationMiddleware(), loggingMiddleware()])
 ```
 
-**4. Engines.** The `AgentEngine` seam — `native`, `claude-code`, `codex`, or
-your own. File mutations stay out of band.
+**4. Engines.** The `AgentEngine` seam — `native`, `claude-code`, `codex`, an
+ACP agent (`eve`), or your own. File mutations stay out of band.
 
 **5. Context providers.** Replace a single pre-baked context string with a
 chain, so a live source can inject fragments:
@@ -211,6 +210,59 @@ missing half of a bargain the metadata already made: it could declare a tool
 undoable but nothing recorded that the tool *ran*, so an application had nothing
 concrete to undo. Deciding whether to undo remains policy, and stays in the
 application.
+
+### Cancellation, tool context and usage
+
+Every entry point takes an optional `AbortSignal` — `runAgent({ signal })`,
+`engine.run(spec, { log, signal })`, and `LoopContext.signal` for a custom loop:
+
+```ts
+const controller = new AbortController()
+const result = await engine.run(spec, { log, signal: controller.signal })
+// later: controller.abort("user canceled")
+result.outcome // "completed" | "steps_exhausted" | "timed_out" | "canceled" | "failed"
+```
+
+The native loop merges it with its own wall-clock deadline and threads the
+result into every model request (`Provider.converse(req, { signal })`, which the
+Anthropic and OpenAI adapters hand to the SDK per request) and every tool call.
+So neither a cancel nor the deadline waits for an in-flight step: `run_code`
+kills its whole process group, `http_fetch` aborts the request, and MCP calls
+send the server a cancellation. An abort is a **clean stop, not a throw** — the
+run resolves with the prose it had, `outcome: "canceled"` (the caller's signal)
+or `"timed_out"` (the deadline), and no summary call is spent. A model
+that ignores the signal and answers anyway has its turn recorded and its prose
+kept, but the outcome is still the stop's, and none of the tools it asked for
+run; an unrelated error that merely coincides with the stop still propagates.
+`EngineResult.outcome` carries the same value; the external engines map their
+harness's ending onto it.
+
+Tools receive a second argument, `ToolContext`:
+
+```ts
+const tool: Tool = {
+  spec,
+  meta: { replay: "safe" }, // idempotent: may be re-run after an interruption
+  execute: async (input, ctx) => {
+    // ctx.signal — stop when the run stops; ctx.callId — the model's call id
+    // (matches tool.called.callId); ctx.runId — when the caller supplied one
+    return doWork(input, { signal: ctx?.signal, idempotencyKey: ctx?.callId })
+  },
+}
+```
+
+`ToolMetadata.replay` is `"safe"` or `"unsafe"`, and **absent means unsafe**.
+It is copied onto `tool.called` / `tool.succeeded`, and `replaySafeTools()`
+selects the tools that declared it. The kernel only records the claim; whether
+to replay is the application's decision.
+
+Token usage is reported where the provider's API returns it:
+`ConverseResult.usage`, `ModelResult.usage` and `model.turn.usage` on the
+event stream. A provider opts in with `reportsUsage: true` (the Anthropic and
+OpenAI-compatible adapters do), and `chatModel` derives `caps.usage` from it, so
+the mock and custom providers never advertise usage they do not deliver. `inputTokens` is all input processed, cached or not (so
+`totalTokens = inputTokens + outputTokens`); `cacheReadTokens` /
+`cacheWriteTokens` break out the prompt-cache share of it.
 
 ## Usage
 

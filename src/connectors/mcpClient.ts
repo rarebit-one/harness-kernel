@@ -14,10 +14,16 @@ import type { ConnectorConfig } from "../types.js"
  */
 export const MCP_CLIENT_NAME = "harness-kernel"
 
+/** Per-call options for {@link McpConnection.callTool}. */
+export interface McpCallOptions {
+  /** Aborts the request; the SDK notifies the server that the call was cancelled. */
+  signal?: AbortSignal
+}
+
 /** A live MCP connection, narrowed to what the tool registry needs. */
 export interface McpConnection {
   listTools(): Promise<unknown>
-  callTool(name: string, args?: Record<string, unknown>): Promise<unknown>
+  callTool(name: string, args?: Record<string, unknown>, opts?: McpCallOptions): Promise<unknown>
   close(): Promise<void>
 }
 
@@ -78,7 +84,12 @@ export async function connectWithTransport(
 
   return {
     listTools: () => client.listTools(),
-    callTool: (toolName, args = {}) => client.callTool({ name: toolName, arguments: args }),
+    callTool: (toolName, args = {}, opts) =>
+      client.callTool(
+        { name: toolName, arguments: args },
+        undefined,
+        opts?.signal ? { signal: opts.signal } : undefined,
+      ),
     close: () => client.close(),
   }
 }

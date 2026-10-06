@@ -1,4 +1,5 @@
 import type { McpServerConfig, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import { runStop, type StoppedBy } from "../signals.js"
 import type { ClaudeCodeMessage, ClaudeCodeOptions } from "./claudeCode.js"
 import { CAPABILITY_SERVER_NAME, capabilitySdkServer, capabilityToolIds } from "./capabilityMcp.js"
 import { connectorServers } from "./connectorMcp.js"
@@ -19,11 +20,13 @@ export async function* defaultClaudeCodeDriver(
 ): AsyncIterable<ClaudeCodeMessage> {
   const { query } = await import("@anthropic-ai/claude-agent-sdk")
 
+  // The SDK takes an AbortController, so the merged stop signal (own timer +
+  // the caller's cancel) drives one. `stop.stoppedBy()` says which fired.
   const controller = new AbortController()
-  const timer =
-    opts.maxDurationMs && opts.maxDurationMs > 0
-      ? setTimeout(() => controller.abort(), opts.maxDurationMs)
-      : undefined
+  const stop = runStop(opts.maxDurationMs, opts.signal)
+  const onStop = (): void => controller.abort(stop.signal?.reason)
+  if (stop.signal?.aborted) onStop()
+  else stop.signal?.addEventListener("abort", onStop, { once: true })
 
   // Mount the run's MCP servers: the runner-hosted, workspace-scoped capability
   // surface (in-process) so Claude Code emits issues/knowledge/files uniformly with
@@ -61,14 +64,40 @@ export async function* defaultClaudeCodeDriver(
     ...(allowedTools ? { allowedTools } : {}),
   }
 
+  // The stream's last result: a stop after a clean one must not relabel a run
+  // that had already finished, and one after an error result keeps its text.
+  let lastResult: ResultMessage | undefined
   try {
     for await (const message of query({ prompt: opts.prompt, options })) {
       const normalized = normalize(message)
+      if (normalized?.kind === "result") lastResult = normalized
       if (normalized) yield normalized
     }
+  } catch (err) {
+    if (!stop.stoppedBy()) throw err
   } finally {
-    if (timer) clearTimeout(timer)
+    stop.signal?.removeEventListener("abort", onStop)
   }
+  // An abort ends the SDK's stream with an error (or an error result), not a
+  // clean result; report a result that says who stopped it, so the engine can
+  // map the outcome.
+  const stopped = stopResult(lastResult, stop.stoppedBy())
+  if (stopped) yield stopped
+}
+
+type ResultMessage = Extract<ClaudeCodeMessage, { kind: "result" }>
+
+/**
+ * The result to report after a stop, or `undefined` when there is nothing to
+ * add: no stop happened, or the harness had already finished cleanly. After an
+ * error result the harness's own text is carried over rather than blanked.
+ */
+export function stopResult(
+  last: ResultMessage | undefined,
+  stoppedBy: StoppedBy | undefined,
+): ResultMessage | undefined {
+  if (!stoppedBy || (last && !last.isError)) return undefined
+  return { kind: "result", text: last?.text ?? "", isError: true, stoppedBy }
 }
 
 function normalize(message: SDKMessage): ClaudeCodeMessage | undefined {

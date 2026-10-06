@@ -64,6 +64,13 @@ export class NativeEngine implements AgentEngine {
   }
 
   async run(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {
+    // Setup (connecting MCP servers, assembling context) happens before the
+    // loop sees the signal, and either can stall. So a cancel is honoured here
+    // too: an already-canceled run does no setup at all, and a cancel during a
+    // stalled setup step returns at once instead of waiting it out. Such a run
+    // never started its loop, so it emits no events.
+    if (ctx.signal?.aborted) return canceledBeforeLoop(ctx)
+
     const provider = selectProvider(spec.provider.preferred, {
       model: spec.provider.model,
       credentials: spec.provider.credentials,
@@ -84,7 +91,15 @@ export class NativeEngine implements AgentEngine {
     // Connector tools are NOT re-gated by permissions.tools: the caller
     // already authorized them per connector (scope + grants) when it populated
     // connectors, and their names are namespaced `<connector>__<tool>`.
-    const connectors = await connectorTools(spec.connectors)
+    // The signal reaches `connectorTools`, which closes whatever it had
+    // already opened when a cancel lands mid-setup.
+    let connectors: Awaited<ReturnType<typeof connectorTools>>
+    try {
+      connectors = await connectorTools(spec.connectors, undefined, { signal: ctx.signal })
+    } catch (err) {
+      if (!ctx.signal?.aborted) throw err
+      return canceledBeforeLoop(ctx)
+    }
     try {
       const tools = [...primitives, ...connectors.tools]
       ctx.log(`tools: ${tools.map((t) => t.spec.name).join(", ") || "(none)"}`)
@@ -92,24 +107,32 @@ export class NativeEngine implements AgentEngine {
       // Budgets are resolved before the call: a loop is handed numbers, not
       // optionals, so a second implementation cannot accidentally run to a
       // different ceiling than the one the kernel ships.
+      let context: string
+      try {
+        context = await untilAborted(this.buildContext(spec, ctx), ctx.signal)
+      } catch (err) {
+        if (!ctx.signal?.aborted) throw err
+        return canceledBeforeLoop(ctx)
+      }
       const result = await runWithEvents(
         this.loop,
         {
           model: asChatModel(provider),
           system: buildSystemPrompt(spec.workflow, spec.workspaceId, spec.workflowPath),
-          userPrompt: buildUserPrompt(
-            spec.workflow,
-            await this.buildContext(spec, ctx),
-            spec.inputs,
-          ),
+          userPrompt: buildUserPrompt(spec.workflow, context, spec.inputs),
           tools,
           limits: resolveLoopLimits(spec.limits),
         },
         // The bookends come from `runWithEvents`, so an application's own loop
         // gets them without having to know they exist.
-        { log: ctx.log, events: runEventEmitter(ctx.emit, ctx.log) },
+        {
+          log: ctx.log,
+          events: runEventEmitter(ctx.emit, ctx.log),
+          runId: spec.runId,
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        },
       )
-      return { text: result.text }
+      return { text: result.text, outcome: result.outcome }
     } finally {
       // Connectors are only needed during the loop; close them here (the engine
       // opened them) regardless of how run() exits.
@@ -135,6 +158,30 @@ export class NativeEngine implements AgentEngine {
     const assembled = renderContext(fragments)
     return spec.context ? `${spec.context}\n\n${assembled}` : assembled
   }
+}
+
+/** The result of a run canceled before its loop started: nothing ran. */
+function canceledBeforeLoop(ctx: EngineContext): EngineResult {
+  ctx.log("native: canceled before the loop started")
+  return {
+    text: "(no output)\n\n[run stopped: canceled before the run started]",
+    outcome: "canceled",
+  }
+}
+
+/**
+ * Await `work`, but stop waiting (rejecting with the signal's reason) the
+ * moment `signal` aborts. The work itself is not interrupted — the caller
+ * cleans up whatever it eventually produces.
+ */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason as Error)
+    if (signal.aborted) return onAbort()
+    signal.addEventListener("abort", onAbort, { once: true })
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort))
+  })
 }
 
 function buildSystemPrompt(

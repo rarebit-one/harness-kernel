@@ -60,15 +60,19 @@ export const CHAT_KIND = "chat"
  * the same place a perception model sits.
  *
  * Capabilities are reported conservatively, from what the `Provider` interface
- * can actually express: it has no streaming method, no attachment channel and
- * reports no usage, so only `tools` is true. A richer adapter can declare more.
+ * can actually express: it has no streaming method and no attachment channel,
+ * so those stay false. `usage` follows the provider's own `reportsUsage`
+ * declaration: the SDK-backed adapters set it (their `ConverseResult.usage`
+ * becomes `ModelResult.usage`), while a provider that declares nothing — the
+ * mock, a custom provider — reports `usage: false` rather than promising
+ * accounting it does not deliver.
  */
 export function chatModel(provider: Provider, caps: Partial<ModelCaps> = {}): ChatModel {
   const resolved: ModelCaps = {
     streaming: false,
     tools: true,
     multimodalInput: false,
-    usage: false,
+    usage: provider.reportsUsage === true,
     ...caps,
   }
 
@@ -94,12 +98,14 @@ export function chatModel(provider: Provider, caps: Partial<ModelCaps> = {}): Ch
       }
       ctx.signal?.throwIfAborted()
 
-      const value = await provider.converse({
-        system: req.system,
-        messages: req.messages,
-        tools: req.tools,
-      })
-      return { value }
+      const converseReq = { system: req.system, messages: req.messages, tools: req.tools }
+      // The signal rides through to the provider's HTTP call, so an abort stops
+      // the request in flight rather than after it returns. Passed only when
+      // present so a provider with a one-argument `converse` sees no change.
+      const value = ctx.signal
+        ? await provider.converse(converseReq, { signal: ctx.signal })
+        : await provider.converse(converseReq)
+      return { value, ...(value.usage ? { usage: value.usage } : {}) }
     },
 
     // The `Provider` interface exposes no health endpoint, so report the honest

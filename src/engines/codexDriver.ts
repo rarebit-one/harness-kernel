@@ -2,6 +2,8 @@ import { spawn } from "node:child_process"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { DEFAULT_STOP_GRACE_MS, terminateProcessGroup } from "../processGroup.js"
+import { runStop } from "../signals.js"
 import type { CodexMessage, CodexOptions } from "./codex.js"
 
 /**
@@ -45,11 +47,11 @@ import type { CodexMessage, CodexOptions } from "./codex.js"
  * is touched in CI.
  */
 export async function* defaultCodexDriver(opts: CodexOptions): AsyncIterable<CodexMessage> {
-  const controller = new AbortController()
-  const timer =
-    opts.maxDurationMs && opts.maxDurationMs > 0
-      ? setTimeout(() => controller.abort(), opts.maxDurationMs)
-      : undefined
+  // The run's own timer merged with the caller's cancel; `stop.stoppedBy()`
+  // says which one fired. codex runs in its own process group so a stop can
+  // reach everything it spawned: SIGTERM, a grace period, then SIGKILL.
+  const stop = runStop(opts.maxDurationMs, opts.signal)
+  let stopping: Promise<void> | undefined
 
   const outDir = await mkdtemp(path.join(tmpdir(), "harness-codex-out-"))
   const lastMessageFile = path.join(outDir, "last-message.txt")
@@ -71,7 +73,7 @@ export async function* defaultCodexDriver(opts: CodexOptions): AsyncIterable<Cod
       ],
       {
         cwd: opts.cwd,
-        signal: controller.signal,
+        detached: true,
         env: {
           ...process.env,
           CODEX_HOME: opts.codexHome,
@@ -84,6 +86,13 @@ export async function* defaultCodexDriver(opts: CodexOptions): AsyncIterable<Cod
         stdio: ["pipe", "pipe", "pipe"],
       },
     )
+    const onStop = (): void => {
+      stopping ??= terminateProcessGroup(child, opts.cancelGraceMs ?? DEFAULT_STOP_GRACE_MS)
+    }
+    if (stop.signal?.aborted) onStop()
+    else stop.signal?.addEventListener("abort", onStop, { once: true })
+    // A stopped child may never read its stdin; don't let EPIPE surface.
+    child.stdin.on("error", () => {})
     child.stdin.end(opts.prompt)
 
     let out = ""
@@ -93,10 +102,34 @@ export async function* defaultCodexDriver(opts: CodexOptions): AsyncIterable<Cod
     child.stdout.on("data", (chunk: string) => (out += chunk))
     child.stderr.on("data", (chunk: string) => (err += chunk))
 
-    const code: number = await new Promise((resolve, reject) => {
-      child.on("error", reject)
-      child.on("close", (c) => resolve(c ?? 0))
-    })
+    let code: number
+    try {
+      code = await new Promise((resolve, reject) => {
+        child.on("error", reject)
+        // Killed by a signal reports no exit code; that is still a failure.
+        child.on("close", (c, sig) => resolve(c ?? (sig ? 1 : 0)))
+      })
+    } catch (error) {
+      if (!stop.stoppedBy()) throw error
+      code = 1
+    } finally {
+      stop.signal?.removeEventListener("abort", onStop)
+    }
+
+    // Stopped: wait until the whole group is gone (SIGKILL after the grace
+    // period), then report who stopped it with whatever codex had written.
+    const stoppedEarly = stopping ? stop.stoppedBy() : undefined
+    if (stopping) await stopping
+    if (stoppedEarly && code !== 0) {
+      const partial = await readFile(lastMessageFile, "utf8").catch(() => "")
+      yield {
+        kind: "result",
+        text: partial.trim() || out.trim(),
+        isError: true,
+        stoppedBy: stoppedEarly,
+      }
+      return
+    }
 
     // On a FAILED run, surface a tail of codex's stderr as an assistant message so it
     // lands in the run logs for diagnosis — codex logs MCP-server startup + tool-call
@@ -112,9 +145,10 @@ export async function* defaultCodexDriver(opts: CodexOptions): AsyncIterable<Cod
     // Prefer codex's final-message file; fall back to the raw stdout/stderr transcript.
     const lastMessage = await readFile(lastMessageFile, "utf8").catch(() => "")
     const text = lastMessage.trim() || out.trim() || err.trim()
-    yield { kind: "result", text, isError: code !== 0 }
+    // A stop that killed the child without an `error` event still says so.
+    const stoppedBy = code !== 0 ? stop.stoppedBy() : undefined
+    yield { kind: "result", text, isError: code !== 0, ...(stoppedBy ? { stoppedBy } : {}) }
   } finally {
-    if (timer) clearTimeout(timer)
     await rm(outDir, { recursive: true, force: true })
   }
 }

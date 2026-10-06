@@ -1,8 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk"
+import type { TokenUsage } from "../models/types.js"
 import { maxTokens, providerMaxRetries, providerTimeoutMs } from "./clientOptions.js"
 import type {
   AgentMessage,
   CompletionRequest,
+  ConverseOptions,
   ConverseRequest,
   ConverseResult,
   Provider,
@@ -54,8 +56,41 @@ export function parseAnthropicContent(content: Anthropic.ContentBlock[]): Conver
   return { text, toolCalls }
 }
 
+/**
+ * Map an Anthropic `usage` block to the kernel's token accounting (pure; tested).
+ *
+ * Anthropic's `input_tokens` counts only UNCACHED input; cache reads and cache
+ * writes are reported separately. Total input is the sum of all three, so that
+ * is what `inputTokens` carries, with the cache split out alongside.
+ */
+export function anthropicUsage(
+  usage:
+    | Pick<
+        Anthropic.Usage,
+        "input_tokens" | "output_tokens" | "cache_read_input_tokens" | "cache_creation_input_tokens"
+      >
+    | Pick<Anthropic.Usage, "input_tokens" | "output_tokens">
+    | null
+    | undefined,
+): TokenUsage | undefined {
+  if (!usage) return undefined
+  const cacheRead = "cache_read_input_tokens" in usage ? (usage.cache_read_input_tokens ?? 0) : 0
+  const cacheWrite =
+    "cache_creation_input_tokens" in usage ? (usage.cache_creation_input_tokens ?? 0) : 0
+  const inputTokens = usage.input_tokens + cacheRead + cacheWrite
+  const outputTokens = usage.output_tokens
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    ...(cacheRead > 0 ? { cacheReadTokens: cacheRead } : {}),
+    ...(cacheWrite > 0 ? { cacheWriteTokens: cacheWrite } : {}),
+  }
+}
+
 export class AnthropicProvider implements Provider {
   readonly name = "anthropic"
+  readonly reportsUsage = true
   private client: Anthropic
   private model: string
 
@@ -85,19 +120,25 @@ export class AnthropicProvider implements Provider {
       .join("\n")
   }
 
-  async converse(req: ConverseRequest): Promise<ConverseResult> {
-    const message = await this.client.messages.create({
-      model: this.model,
-      max_tokens: maxTokens(),
-      system: req.system,
-      tools: req.tools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
-      })),
-      messages: toAnthropicMessages(req.messages),
-    })
+  async converse(req: ConverseRequest, opts?: ConverseOptions): Promise<ConverseResult> {
+    const message = await this.client.messages.create(
+      {
+        model: this.model,
+        max_tokens: maxTokens(),
+        system: req.system,
+        tools: req.tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
+        })),
+        messages: toAnthropicMessages(req.messages),
+      },
+      // Per-request, so an abort cancels THIS call (retries included) and
+      // leaves the shared client untouched.
+      opts?.signal ? { signal: opts.signal } : undefined,
+    )
 
-    return parseAnthropicContent(message.content)
+    const usage = anthropicUsage(message.usage)
+    return { ...parseAnthropicContent(message.content), ...(usage ? { usage } : {}) }
   }
 }
