@@ -1,3 +1,4 @@
+import { refusePrivateRun } from "../private.js"
 import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -100,6 +101,8 @@ export class CodexEngine implements AgentEngine {
   }
 
   supports(spec: RunSpec): EngineSupport {
+    const refusal = refusePrivateRun("codex", spec)
+    if (refusal) return refusal
     if (process.env.RUNNER_ENABLE_CODEX !== "1") {
       return { ok: false, reason: "codex engine is disabled (set RUNNER_ENABLE_CODEX=1)" }
     }

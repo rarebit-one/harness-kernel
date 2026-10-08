@@ -36,6 +36,19 @@ export interface RunSpec {
   provider: { preferred?: string | null } & ProviderSelection
   /** Optional budget overrides; engines that don't honour these ignore them. */
   limits?: { maxSteps?: number; maxDurationMs?: number }
+  /**
+   * The run handles material that must not leave the host. The native engine
+   * runs it only on the `local` provider (`provider.preferred: "local"` with
+   * `LOCAL_MODEL_BASE_URL` set; anything else is refused, never rerouted), and
+   * narrows `EngineContext.log` and `EngineContext.emit` to phase codes
+   * only — no tool arguments, tool results, model text or error messages (see
+   * `privateRunChannels`) — and replaces a thrown error with a
+   * `PrivateRunError` that carries none of the original. Every out-of-process
+   * engine refuses a private run in `supports()`: what its harness does with
+   * the material is outside the kernel's reach. Absent or `false` changes
+   * nothing. The returned `EngineResult.text` is still the caller's to place.
+   */
+  private?: boolean
 }
 
 export interface EngineContext {

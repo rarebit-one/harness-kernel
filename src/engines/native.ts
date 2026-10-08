@@ -6,6 +6,7 @@ import { asChatModel } from "../models/chat.js"
 import { selectProvider } from "../providers/index.js"
 import { secretsToEnv } from "../secrets.js"
 import { primitiveTools, connectorTools } from "../tools/registry.js"
+import { PrivateRunError, privateRunChannels } from "../private.js"
 import type { Tool } from "../tools/registry.js"
 import type { WorkflowDefinition } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
@@ -59,11 +60,50 @@ export class NativeEngine implements AgentEngine {
     this.loop = options.loop ?? nativeLoop
   }
 
-  supports(): EngineSupport {
+  /**
+   * A private run must stay on local inference, and that is a guarantee, not a
+   * preference: it is refused unless the run names the `local` provider AND the
+   * host has one configured. There is no fallback to a cloud provider found in
+   * ambient credentials, and none to the offline mock either — a private run
+   * that silently ran somewhere else, or not at all, would look like it worked.
+   */
+  supports(spec?: RunSpec): EngineSupport {
+    if (spec?.private) return privateProviderSupport(spec)
     return { ok: true }
   }
 
   async run(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {
+    if (!spec.private) return this.runWith(spec, ctx)
+
+    // Checked again here, not only in `supports()`: a caller that skips the
+    // capability check must still never reach a non-local provider. The reason
+    // names configuration only, never the run's material.
+    const support = privateProviderSupport(spec)
+    if (!support.ok) throw new Error(support.reason)
+
+    // A private run's material must not reach the caller's log or event sink.
+    // Narrowing the channels here, rather than inside the loop, covers every
+    // writer at once: the loop (including an injected one), context providers,
+    // connector setup and this engine's own lines.
+    const channels = privateRunChannels(ctx.log, ctx.emit)
+    let loopStarted = false
+    try {
+      return await this.runWith(spec, {
+        ...ctx,
+        log: channels.log,
+        emit: (event) => {
+          if (event.type === "run.started") loopStarted = true
+          channels.emit(event)
+        },
+      })
+    } catch {
+      // The original error can quote the material (a tool's error, a provider
+      // echoing the prompt), so none of it — message or cause — goes back.
+      throw new PrivateRunError(loopStarted ? "loop" : "setup")
+    }
+  }
+
+  private async runWith(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {
     // Setup (connecting MCP servers, assembling context) happens before the
     // loop sees the signal, and either can stall. So a cancel is honoured here
     // too: an already-canceled run does no setup at all, and a cancel during a
@@ -75,6 +115,11 @@ export class NativeEngine implements AgentEngine {
       model: spec.provider.model,
       credentials: spec.provider.credentials,
     })
+    // Belt and braces for the private path: whatever selection did, a private
+    // run proceeds on the local provider or not at all.
+    if (spec.private && provider.name !== "local") {
+      throw new Error(`private run resolved to provider "${provider.name}", not "local"`)
+    }
     ctx.log(`provider: ${provider.name}`)
 
     // General-purpose primitives (secrets injected as env) + the run's connectors.
@@ -158,6 +203,31 @@ export class NativeEngine implements AgentEngine {
     const assembled = renderContext(fragments)
     return spec.context ? `${spec.context}\n\n${assembled}` : assembled
   }
+}
+
+/**
+ * Whether a private run can be held to local inference on this host. Only an
+ * explicit `preferred: "local"` with `LOCAL_MODEL_BASE_URL` set qualifies; every
+ * other preference — including none, which would fall through to ambient cloud
+ * keys or the mock — is refused.
+ */
+function privateProviderSupport(spec: RunSpec): EngineSupport {
+  if (spec.provider.preferred !== "local") {
+    return {
+      ok: false,
+      reason:
+        `a private run requires provider.preferred "local" (got ` +
+        `${spec.provider.preferred ? `"${spec.provider.preferred}"` : "none"}); ` +
+        "it is never routed to another provider",
+    }
+  }
+  if (!process.env.LOCAL_MODEL_BASE_URL) {
+    return {
+      ok: false,
+      reason: "a private run requires the local provider, but LOCAL_MODEL_BASE_URL is not set",
+    }
+  }
+  return { ok: true }
 }
 
 /** The result of a run canceled before its loop started: nothing ran. */

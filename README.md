@@ -109,6 +109,8 @@ chain, so a live source can inject fragments:
 
 ```ts
 new NativeEngine({ contextProviders: [myLiveFeed] })
+// or, through the selector:
+selectEngine("native", { domainTools, contextProviders: [myLiveFeed] })
 ```
 
 Providers run in parallel; one that fails is logged and skipped rather than
@@ -194,6 +196,22 @@ receives. The flip side is a disclosure surface worth knowing about — that fie
 carries the **raw tool arguments**, so any secret or PII a model passed as an
 argument now reaches every attached sink. Nothing outside the model conversation
 captured these before; a sink that persists or forwards events should redact.
+
+**Private runs.** Set `RunSpec.private: true` when the run handles material
+that must not leave the host. The native engine runs it only on the `local`
+provider (`provider.preferred: "local"` with `LOCAL_MODEL_BASE_URL` set) and
+refuses it otherwise, with no fallback to ambient cloud keys or the mock. It
+also narrows both channels at
+the source (`privateRunChannels`): `log` gets no free text, only one
+`phase=<event> …` line per event, and every event is marked `redacted: true`
+with its model text, tool arguments, error messages and final text withheld (a
+tool name the run did not register becomes `(unregistered)`, and tool-call ids
+become per-run `call-<n>` surrogates). Structure
+survives: types, `seq`, steps, registered tool names, outcomes, budgets, usage
+and result byte counts. A thrown error is replaced by a `PrivateRunError` that
+carries neither the original message nor a `cause`. The claude-code, codex and
+ACP engines refuse a private run in `supports()`. `EngineResult.text` is still
+returned to the caller, which decides where it goes.
 
 `run.finished` is always the last event, including when the loop throws — the
 error propagates unchanged, but `outcome: "failed"` closes the stream first, so

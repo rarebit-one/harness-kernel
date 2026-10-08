@@ -1,3 +1,4 @@
+import { refusePrivateRun } from "../private.js"
 import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -125,6 +126,8 @@ export class AcpEngine implements AgentEngine {
   }
 
   supports(spec: RunSpec): EngineSupport {
+    const refusal = refusePrivateRun(this.name, spec)
+    if (refusal) return refusal
     if (process.env[this.agent.enableEnv] !== "1") {
       return {
         ok: false,

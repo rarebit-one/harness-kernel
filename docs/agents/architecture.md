@@ -26,6 +26,7 @@ around — the kernel never bends to a consumer.
 | `src/tools/` | `Tool` + `primitiveTools` (generic) / `connectorTools`; `metadata.ts` (scoping + projections); `modelTool.ts` (a model surfaced as a tool). Domain tools are the application's, injected via `DomainToolFactory`. |
 | `src/primitives/` | Sandbox primitives: `codeExec`, `fs`, `http`, `download` |
 | `src/engines/` | The `AgentEngine` seam + native / claude-code / codex / ACP (eve) harnesses; the capability *mechanism* (guards, `write_file`, MCP + stdio transports) — never an application's capability set |
+| `src/private.ts` | `privateRunChannels` / `PrivateRunError` — what `RunSpec.private` narrows the run's `log` and event sink to (phase codes only) |
 | `src/signals.ts` | Internal: the caller's cancel merged with a wall-clock deadline (`deadlineSignal`, `runStop`), and the harness-ending → `RunOutcome` map |
 | `src/secrets.ts` | `secretsToEnv` |
 
