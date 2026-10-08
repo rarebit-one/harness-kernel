@@ -131,6 +131,11 @@ export type {
   RunFinishedEvent,
 } from "./events.js"
 
+// Private runs (`RunSpec.private`): the run's log and event channels carry phase
+// codes only, and a thrown error carries none of the run's material.
+export { privateRunChannels, PrivateRunError, PRIVATE_REDACTION } from "./private.js"
+export type { PrivateRunChannels } from "./private.js"
+
 // ---------------------------------------------------------------------------
 // Extension point 6 — tools: generic primitives, injectable domain emissions,
 // MCP connectors, rich metadata + projections, and models-as-tools

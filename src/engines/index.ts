@@ -3,6 +3,7 @@ import { ClaudeCodeEngine, type CapabilityToolFactory } from "./claudeCode.js"
 import { CodexEngine } from "./codex.js"
 import { AcpEngine, EVE_AGENT } from "./acp.js"
 import type { AgentEngine } from "./types.js"
+import type { ContextProvider } from "../context/types.js"
 
 export type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 
@@ -14,6 +15,12 @@ export type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec }
 export interface EngineSelection {
   /** Extra tools for the in-process loop, beyond the generic primitives. */
   domainTools?: DomainToolFactory
+  /**
+   * Extra context sources for the in-process loop, appended after the spec's
+   * own `context` (see `NativeEngineOptions.contextProviders`). Only the native
+   * engine assembles context this way; the external engines ignore it.
+   */
+  contextProviders?: ContextProvider[]
   /** The capability surface exposed to Claude Code over its in-process MCP server. */
   capabilityTools?: CapabilityToolFactory
   /**
@@ -57,6 +64,9 @@ export function selectEngine(name?: string | null, selection: EngineSelection = 
       return new AcpEngine(EVE_AGENT, selection.capabilityServerScript)
     }
     default:
-      return new NativeEngine(selection.domainTools ? { domainTools: selection.domainTools } : {})
+      return new NativeEngine({
+        ...(selection.domainTools ? { domainTools: selection.domainTools } : {}),
+        ...(selection.contextProviders ? { contextProviders: selection.contextProviders } : {}),
+      })
   }
 }

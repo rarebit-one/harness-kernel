@@ -1,3 +1,4 @@
+import { refusePrivateRun } from "../private.js"
 import type { RunOutcome } from "../events.js"
 import { harnessOutcome, type StoppedBy } from "../signals.js"
 import type { ConnectorConfig } from "../types.js"
@@ -93,6 +94,8 @@ export class ClaudeCodeEngine implements AgentEngine {
   }
 
   supports(spec: RunSpec): EngineSupport {
+    const refusal = refusePrivateRun("claude-code", spec)
+    if (refusal) return refusal
     if (process.env.RUNNER_ENABLE_CLAUDE_CODE !== "1") {
       return {
         ok: false,

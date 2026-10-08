@@ -52,6 +52,12 @@ export type RunEventType =
 export interface RunEventBase {
   seq: number
   at: number
+  /**
+   * Set on every event of a private run (`RunSpec.private`): its content fields
+   * (model text, tool arguments, error messages, final text) were withheld. Lets
+   * a consumer tell an empty field from a redacted one. Absent otherwise.
+   */
+  redacted?: true
 }
 
 /**
