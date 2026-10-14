@@ -8,6 +8,7 @@ import {
 } from "@zed-industries/agent-client-protocol"
 import { runStop, type StoppedBy } from "../signals.js"
 import type { AcpClientEvents, AcpOptions, AcpOutcome } from "./acp.js"
+import { childEnv } from "./isolation.js"
 
 /**
  * The outcome of a prompt turn that returned. A stop is credited only when the
@@ -20,6 +21,14 @@ export function promptOutcome(stopReason: string, stoppedBy: StoppedBy | undefin
 
 /** How long an agent gets to honour `session/cancel` before it is killed. */
 const DEFAULT_CANCEL_GRACE_MS = 5_000
+
+/** The agent process environment: an allowlist, never the host's whole one (see `childEnv`). */
+export function acpEnv(
+  opts: Pick<AcpOptions, "env" | "inheritEnvPrefixes">,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  return childEnv(opts.inheritEnvPrefixes ?? [], opts.env, env)
+}
 
 /**
  * The default ACP driver: the single integration boundary to an ACP agent
@@ -50,7 +59,7 @@ export async function defaultAcpDriver(
 ): Promise<AcpOutcome> {
   const child = spawn(opts.command, opts.args, {
     cwd: opts.cwd,
-    env: { ...process.env, ...opts.env },
+    env: acpEnv(opts),
     stdio: ["pipe", "pipe", "pipe"],
   })
 

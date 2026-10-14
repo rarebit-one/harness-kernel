@@ -329,6 +329,38 @@ if (!support.ok) throw new Error(support.reason) // fail loud, never silently de
 const { text } = await engine.run(spec, { log: console.error })
 ```
 
+The out-of-process engines (`claude-code`, `codex`, ACP) hand the run to a
+harness that has its own shell and approves its own actions, so the box it runs
+in is the only boundary. Each refuses in `supports()` unless it is enabled
+(`RUNNER_ENABLE_<ENGINE>=1`), the workflow asks for the `ephemeral` profile,
+**and** the run has at least `container` isolation. Two parties must assert
+that last condition, and the weaker claim wins:
+
+- the caller, through `RunSpec.isolation` (`none` | `container` | `vm`), stating
+  what it placed the run on;
+- the host process, through `RUNNER_ISOLATION`, set by its own entrypoint and
+  never taken from a payload.
+
+The harness's child process gets an allowlisted environment rather than the
+host's whole one: `PATH`, `HOME`, locale, temp, CA and proxy variables, plus
+that harness's own prefixes (`ANTHROPIC_`/`CLAUDE_` for claude-code,
+`OPENAI_`/`CODEX_` for codex, and `AcpAgentSpec.inheritEnvPrefixes` for an ACP
+agent). A prefix match never passes a credential-looking name (`*KEY*`,
+`*TOKEN*`, `*SECRET*`, …). The one provider key an engine needs is passed
+explicitly instead: claude-code and codex take the run's BYO key, falling back
+to the host's `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`; an ACP agent gets only
+the run's keys. Every other host credential stays with the host. That filter is
+best effort, so keep `inheritEnvPrefixes` narrow. The proxy variables pass
+unfiltered, so a proxy URL with embedded credentials is visible to the harness.
+
+Behaviour that follows from this, since 0.10.0:
+
+- Claude Code on Bedrock or Vertex (`AWS_*`, `GOOGLE_*`) is not reachable
+  through these engines.
+- Claude Code subscription auth (`CLAUDE_CODE_OAUTH_TOKEN`) is not passed; use
+  an API key.
+- An ACP agent no longer falls back to the host's provider keys.
+
 ### The kernel defines no domain tools
 
 `primitiveTools()` is strictly generic — sandboxed shell/file/HTTP access. Tools

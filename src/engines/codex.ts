@@ -1,4 +1,5 @@
 import { refusePrivateRun } from "../private.js"
+import { refuseUnisolated } from "./isolation.js"
 import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -112,7 +113,7 @@ export class CodexEngine implements AgentEngine {
         reason: "codex engine requires the ephemeral runner profile (per-run container isolation)",
       }
     }
-    return { ok: true }
+    return refuseUnisolated("codex", spec) ?? { ok: true }
   }
 
   async run(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {

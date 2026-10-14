@@ -1,6 +1,7 @@
 import type { RunEventSink, RunOutcome } from "../events.js"
 import type { ProviderSelection } from "../providers/index.js"
 import type { ConnectorConfig, Permissions, WorkflowDefinition } from "../types.js"
+import type { Isolation } from "./isolation.js"
 
 /**
  * The provider-neutral, harness-neutral description of one workflow run, handed
@@ -36,6 +37,14 @@ export interface RunSpec {
   provider: { preferred?: string | null } & ProviderSelection
   /** Optional budget overrides; engines that don't honour these ignore them. */
   limits?: { maxSteps?: number; maxDurationMs?: number }
+  /**
+   * How strongly the caller isolated this run from every other run on the host:
+   * `none` (a shared process), `container` (one per run) or `vm` (a microVM per
+   * run). Out-of-process engines refuse anything below `container`, and only
+   * trust it when the host's own `RUNNER_ISOLATION` agrees (see
+   * `effectiveIsolation`). Absent means `none`. The native engine ignores it.
+   */
+  isolation?: Isolation
   /**
    * The run handles material that must not leave the host. The native engine
    * runs it only on the `local` provider (`provider.preferred: "local"` with

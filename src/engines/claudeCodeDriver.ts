@@ -3,6 +3,7 @@ import { runStop, type StoppedBy } from "../signals.js"
 import type { ClaudeCodeMessage, ClaudeCodeOptions } from "./claudeCode.js"
 import { CAPABILITY_SERVER_NAME, capabilitySdkServer, capabilityToolIds } from "./capabilityMcp.js"
 import { connectorServers } from "./connectorMcp.js"
+import { childEnv } from "./isolation.js"
 
 /**
  * The default Claude Code driver: runs the Anthropic Agent SDK's `query()` (which
@@ -59,7 +60,7 @@ export async function* defaultClaudeCodeDriver(
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     abortController: controller,
-    env: { ...process.env, ...(opts.apiKey ? { ANTHROPIC_API_KEY: opts.apiKey } : {}) },
+    env: claudeCodeEnv(opts),
     ...(hasMcpServers ? { mcpServers } : {}),
     ...(allowedTools ? { allowedTools } : {}),
   }
@@ -83,6 +84,23 @@ export async function* defaultClaudeCodeDriver(
   // map the outcome.
   const stopped = stopResult(lastResult, stop.stoppedBy())
   if (stopped) yield stopped
+}
+
+/** Host env the Claude Code CLI may inherit: its own and its provider's settings. */
+const CLAUDE_ENV_PREFIXES = ["ANTHROPIC_", "CLAUDE_"] as const
+
+/**
+ * The CLI's environment: an allowlist, never the host's whole one. The CLI runs
+ * arbitrary bash, so anything the host process holds (its own credentials,
+ * callback tokens) would otherwise be one `env` away from the model. Cloud
+ * back ends that read `AWS_*`/`GOOGLE_*` (Bedrock, Vertex) are not reached
+ * through this engine.
+ */
+export function claudeCodeEnv(
+  opts: Pick<ClaudeCodeOptions, "apiKey">,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  return childEnv(CLAUDE_ENV_PREFIXES, opts.apiKey ? { ANTHROPIC_API_KEY: opts.apiKey } : {}, env)
 }
 
 type ResultMessage = Extract<ClaudeCodeMessage, { kind: "result" }>

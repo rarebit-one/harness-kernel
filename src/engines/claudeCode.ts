@@ -1,4 +1,5 @@
 import { refusePrivateRun } from "../private.js"
+import { refuseUnisolated } from "./isolation.js"
 import type { RunOutcome } from "../events.js"
 import { harnessOutcome, type StoppedBy } from "../signals.js"
 import type { ConnectorConfig } from "../types.js"
@@ -74,10 +75,12 @@ export const defaultCapabilityTools: CapabilityToolFactory = (ctx) => [writeFile
  * captured by the caller's change-set diff — the engine returns prose only.
  *
  * Claude Code runs arbitrary bash, so it must not run on the warm shared runner.
- * `supports()` refuses unless (a) the operator has explicitly enabled it and (b)
- * the run is on the `ephemeral` runner profile (one throwaway container per run —
- * the container, not a human, is the safety boundary). The SDK is loaded lazily by
- * the driver, so this module stays cheap to import on the warm runner.
+ * `supports()` refuses unless (a) the operator has explicitly enabled it, (b)
+ * the workflow asks for the `ephemeral` runner profile, and (c) the run really
+ * has at least container isolation, asserted by both the caller and the host
+ * (see `refuseUnisolated`). The box, not a human, is the safety boundary.
+ * The SDK is loaded lazily by the driver, so this module stays cheap to import
+ * on the warm runner.
  */
 export class ClaudeCodeEngine implements AgentEngine {
   readonly name = "claude-code"
@@ -109,7 +112,7 @@ export class ClaudeCodeEngine implements AgentEngine {
           "claude-code engine requires the ephemeral runner profile (per-run container isolation)",
       }
     }
-    return { ok: true }
+    return refuseUnisolated("claude-code", spec) ?? { ok: true }
   }
 
   async run(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {
