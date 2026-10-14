@@ -1,4 +1,5 @@
 import { refusePrivateRun } from "../private.js"
+import { refuseUnisolated } from "./isolation.js"
 import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -36,6 +37,13 @@ export interface AcpAgentSpec {
   args(spec: RunSpec): string[]
   /** Extra process env — e.g. the provider credentials the agent reads for itself. */
   env(spec: RunSpec): Record<string, string>
+  /**
+   * Prefixes of host env vars the agent may inherit (its own configuration).
+   * Credential-looking names under them are still dropped, but that filter is
+   * best effort (see `childEnv`), so keep each prefix as narrow as the agent's
+   * own settings.
+   */
+  readonly inheritEnvPrefixes?: readonly string[]
 }
 
 /**
@@ -46,7 +54,10 @@ export interface AcpAgentSpec {
 export interface AcpOptions {
   command: string
   args: string[]
+  /** Env the agent gets on top of the allowlisted host env (see `childEnv`). */
   env: Record<string, string>
+  /** Prefixes of host env vars the agent may inherit; from {@link AcpAgentSpec}. */
+  inheritEnvPrefixes?: readonly string[]
   /** The prepared sandbox working tree — the agent's cwd and ACP `session/new` cwd. */
   cwd: string
   /** The run's MCP servers (connectors + the capability server) for `session/new`. */
@@ -140,7 +151,7 @@ export class AcpEngine implements AgentEngine {
         reason: `${this.name} engine requires the ephemeral runner profile (per-run container isolation)`,
       }
     }
-    return { ok: true }
+    return refuseUnisolated(this.name, spec) ?? { ok: true }
   }
 
   async run(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {
@@ -170,6 +181,9 @@ export class AcpEngine implements AgentEngine {
       // The capability env also rides on the process env so the stdio capability
       // server inherits it regardless of how the agent forwards `session/new` env.
       env: { ...this.agent.env(spec), ...capabilityEnv },
+      ...(this.agent.inheritEnvPrefixes
+        ? { inheritEnvPrefixes: this.agent.inheritEnvPrefixes }
+        : {}),
       cwd: spec.workdir,
       mcpServers: toAcpMcpServers(servers),
       prompt: buildPrompt(spec),
@@ -305,6 +319,9 @@ export const EVE_AGENT: AcpAgentSpec = {
   enableEnv: "RUNNER_ENABLE_EVE",
   command: "eve",
   args: () => ["acp"],
+  // Provider settings a BYO key does not cover (a base URL, an org id) and
+  // eve's own configuration.
+  inheritEnvPrefixes: ["ANTHROPIC_", "OPENAI_", "OPENROUTER_", "EVE_"],
   env: (spec) => {
     const env: Record<string, string> = {}
     const creds = spec.provider.credentials

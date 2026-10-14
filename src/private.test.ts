@@ -338,10 +338,15 @@ describe("out-of-process engines refuse a private run", () => {
     process.env = { ...saved }
   })
 
-  const ephemeral = spec({ private: true, workflow: { runner: { profile: "ephemeral" } } })
+  const ephemeral = spec({
+    private: true,
+    isolation: "container",
+    workflow: { runner: { profile: "ephemeral" } },
+  })
 
   it("claude-code", () => {
     process.env.RUNNER_ENABLE_CLAUDE_CODE = "1"
+    process.env.RUNNER_ISOLATION = "container"
     const res = new ClaudeCodeEngine().supports(ephemeral)
     expect(res.ok).toBe(false)
     expect(!res.ok && res.reason).toMatch(/private run/)

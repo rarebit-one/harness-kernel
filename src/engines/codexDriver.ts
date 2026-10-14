@@ -5,6 +5,29 @@ import path from "node:path"
 import { DEFAULT_STOP_GRACE_MS, terminateProcessGroup } from "../processGroup.js"
 import { runStop } from "../signals.js"
 import type { CodexMessage, CodexOptions } from "./codex.js"
+import { childEnv } from "./isolation.js"
+
+/** Host env the codex CLI may inherit: its own and its provider's settings. */
+const CODEX_ENV_PREFIXES = ["OPENAI_", "CODEX_"] as const
+
+/** The codex process environment: an allowlist, never the host's whole one (see `childEnv`). */
+export function codexEnv(
+  opts: Pick<CodexOptions, "codexHome" | "capabilityEnv" | "apiKey">,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  return childEnv(
+    CODEX_ENV_PREFIXES,
+    {
+      CODEX_HOME: opts.codexHome,
+      // The capability stdio MCP server reads these from its env; set them on the
+      // codex process env so the spawned server inherits them even if codex does
+      // not forward the config.toml env table (belt-and-suspenders with that table).
+      ...opts.capabilityEnv,
+      ...(opts.apiKey ? { CODEX_API_KEY: opts.apiKey, OPENAI_API_KEY: opts.apiKey } : {}),
+    },
+    env,
+  )
+}
 
 /**
  * The default codex driver: the single integration boundary to the OpenAI Codex
@@ -74,15 +97,7 @@ export async function* defaultCodexDriver(opts: CodexOptions): AsyncIterable<Cod
       {
         cwd: opts.cwd,
         detached: true,
-        env: {
-          ...process.env,
-          CODEX_HOME: opts.codexHome,
-          // The capability stdio MCP server reads these from its env; set them on the
-          // codex process env so the spawned server inherits them even if codex does
-          // not forward the config.toml env table (belt-and-suspenders with that table).
-          ...opts.capabilityEnv,
-          ...(opts.apiKey ? { CODEX_API_KEY: opts.apiKey, OPENAI_API_KEY: opts.apiKey } : {}),
-        },
+        env: codexEnv(opts),
         stdio: ["pipe", "pipe", "pipe"],
       },
     )

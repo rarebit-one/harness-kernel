@@ -45,7 +45,12 @@ describe("CodexEngine.supports", () => {
 
     process.env.RUNNER_ENABLE_CODEX = "1"
     expect(engine.supports(spec({ workflow: { runner: { profile: "hosted" } } })).ok).toBe(false)
-    expect(engine.supports(spec()).ok).toBe(true)
+    // The profile is only the workflow's request; the run must really be isolated.
+    expect(engine.supports(spec()).ok).toBe(false)
+    process.env.RUNNER_ISOLATION = "container"
+    expect(engine.supports(spec()).ok).toBe(false)
+    expect(engine.supports(spec({ isolation: "container" })).ok).toBe(true)
+    delete process.env.RUNNER_ISOLATION
   })
 })
 

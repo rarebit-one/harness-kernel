@@ -60,7 +60,10 @@ describe("AcpEngine.supports", () => {
 
     process.env.RUNNER_ENABLE_EVE = "1"
     expect(engine.supports(spec({ workflow: { runner: { profile: "hosted" } } })).ok).toBe(false)
-    expect(engine.supports(spec()).ok).toBe(true)
+    expect(engine.supports(spec()).ok).toBe(false)
+    process.env.RUNNER_ISOLATION = "vm"
+    expect(engine.supports(spec({ isolation: "vm" })).ok).toBe(true)
+    delete process.env.RUNNER_ISOLATION
   })
 })
 
@@ -102,6 +105,8 @@ describe("AcpEngine.run", () => {
     expect(drive.captured?.env.ANTHROPIC_API_KEY).toBe("sk-org")
     // The capability env also rides on the process env for the stdio server.
     expect(drive.captured?.env.HARNESS_WORKDIR).toBe(workdir)
+    // The agent's inherit prefixes reach the driver, which spawns with an allowlist.
+    expect(drive.captured?.inheritEnvPrefixes).toEqual(EVE_AGENT.inheritEnvPrefixes)
     expect(ctx.logs.some((l) => l.includes("tool: edit_file"))).toBe(true)
   })
 

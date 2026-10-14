@@ -156,8 +156,13 @@ describe("ClaudeCodeEngine.run", () => {
 
     process.env.RUNNER_ENABLE_CLAUDE_CODE = "1"
     expect(engine.supports(spec({ workflow: { runner: { profile: "hosted" } } })).ok).toBe(false)
-    expect(engine.supports(spec({ workflow: { runner: { profile: "ephemeral" } } }))).toEqual({
-      ok: true,
-    })
+    expect(engine.supports(spec({ workflow: { runner: { profile: "ephemeral" } } })).ok).toBe(false)
+    process.env.RUNNER_ISOLATION = "container"
+    expect(
+      engine.supports(
+        spec({ isolation: "container", workflow: { runner: { profile: "ephemeral" } } }),
+      ),
+    ).toEqual({ ok: true })
+    delete process.env.RUNNER_ISOLATION
   })
 })

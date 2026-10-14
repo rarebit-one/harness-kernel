@@ -71,9 +71,23 @@ describe("ClaudeCodeEngine.supports", () => {
     expect(res.ok).toBe(false)
   })
 
-  it("supports when enabled and on the ephemeral profile", () => {
+  it("refuses an ephemeral-profile run the caller and host don't both isolate", () => {
     process.env.RUNNER_ENABLE_CLAUDE_CODE = "1"
     const res = engine.supports(spec({ workflow: { runner: { profile: "ephemeral" } } }))
-    expect(res).toEqual({ ok: true })
+    expect(res.ok).toBe(false)
+    expect(!res.ok && res.reason).toMatch(/requires at least container isolation/)
+  })
+
+  it("supports when enabled, on the ephemeral profile and isolated", () => {
+    process.env.RUNNER_ENABLE_CLAUDE_CODE = "1"
+    process.env.RUNNER_ISOLATION = "container"
+    try {
+      const res = engine.supports(
+        spec({ isolation: "container", workflow: { runner: { profile: "ephemeral" } } }),
+      )
+      expect(res).toEqual({ ok: true })
+    } finally {
+      delete process.env.RUNNER_ISOLATION
+    }
   })
 })
