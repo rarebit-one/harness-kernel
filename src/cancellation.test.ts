@@ -258,7 +258,7 @@ describe("cancellation — the native loop", () => {
       {
         model: chatModel(new MockProvider()),
         system: "s",
-        userPrompt: "go",
+        messages: [{ role: "user", text: "go" }],
         tools: [],
         limits: { maxSteps: 1, maxDurationMs: 60_000 },
       },
@@ -282,7 +282,7 @@ describe("cancellation — the native loop", () => {
       {
         model: chatModel(new MockProvider()),
         system: "s",
-        userPrompt: "go",
+        messages: [{ role: "user", text: "go" }],
         tools: [],
         limits: { maxSteps: 1, maxDurationMs: 60_000 },
       },

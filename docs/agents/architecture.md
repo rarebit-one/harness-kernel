@@ -19,8 +19,8 @@ around — the kernel never bends to a consumer.
 | `src/models/` | The `ModelInvocation` seam (`types.ts`), the `chat` kind + `Provider` adapter (`chat.ts`), the kind registry (`registry.ts`), middleware (`middleware.ts`) |
 | `src/routing/` | `RouteResolver` + the built-in `StaticRouteResolver` (capabilities as code) |
 | `src/context/` | `ContextProvider` chain — `assembleContext` / `renderContext` |
-| `src/providers/` | `Provider` interface + anthropic / openai / openrouter / mock adapters, `selectProvider` |
-| `src/agent.ts` | `runNativeLoop` — the tool-use loop; `runAgent` is the option-bag adapter onto it, and `resolveLoopLimits` the one home for budget defaults |
+| `src/providers/` | `Provider` interface + anthropic / openai / openrouter / local / mock / scripted adapters, `selectProvider` (+ `providerAvailability`, `ProviderCredentialsError`); `options.ts` is the typed per-call `ProviderOptions` passthrough (token cap, `promptCache`, `responseFormat`, OpenRouter routing) each adapter maps onto its wire format |
+| `src/agent.ts` | `runNativeLoop` — the tool-use loop; `runConversation` (seeded messages in, transcript + structured answer out) and `runAgent` (one prompt in, prose out) are the adapters onto it, and `resolveLoopLimits` the one home for budget defaults |
 | `src/loop.ts` | The `Loop` seam + `nativeLoop` — the control loop as an extension point |
 | `src/events.ts` | `RunEvent` + `runEventEmitter` / `recordRunEvents` — the structured run stream the loop and `EngineContext` emit |
 | `src/tools/` | `Tool` + `primitiveTools` (generic) / `connectorTools`; `metadata.ts` (scoping + projections); `modelTool.ts` (a model surfaced as a tool). Domain tools are the application's, injected via `DomainToolFactory`. |
@@ -43,8 +43,8 @@ a tool, or a control loop.
 | 3 | **Middleware** | `Middleware` | correlation, logging, health tracking, error redaction |
 | 4 | **Engines** | `AgentEngine` | native / claude-code / codex / ACP (`eve`, selected via `selectEngine`); `EngineContext.signal` cancels, `EngineResult.outcome` reports why it stopped |
 | 5 | **Context providers** | `ContextProvider` | parallel assembly + rendering; wired into `NativeEngine` |
-| 6 | **Tools** | `Tool` + `ToolMetadata` | primitives, MCP connectors, projections (incl. `replaySafeTools`), `modelAsTool`; each call gets a `ToolContext` (`signal`, `callId`, `runId?`); domain tools + capabilities are injected |
-| 7 | **Loop** | `Loop` | `nativeLoop` — the one loop the kernel ships, which `runAgent` also runs; `LoopContext.signal` cancels it |
+| 6 | **Tools** | `Tool` + `ToolMetadata` | primitives, MCP connectors, projections (incl. `replaySafeTools`), `modelAsTool`, `terminalTool`; `ToolMetadata.dispatch` (`execute` / `terminal` / `external`) is the one field the loop acts on; each call gets a `ToolContext` (`signal`, `callId`, `runId?`); domain tools + capabilities are injected |
+| 7 | **Loop** | `Loop` | `nativeLoop` — the one loop the kernel ships, which `runAgent` and `runConversation` also run; takes seeded `messages`, returns the transcript, `stopReason`, summed `usage` and the served `provider`/`model`; `LoopContext.signal` cancels it |
 
 **Cancellation is one signal, threaded end to end.** A caller's `signal`
 (`RunAgentOptions`, `EngineContext`, `LoopContext`) is merged in

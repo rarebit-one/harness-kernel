@@ -167,5 +167,13 @@ jobs:
             echo "To publish: set the repo variable PUBLISH_LIVE=true, re-run, then UNSET it."
             exit 0
           fi
-          echo "::notice::ARMED — publishing ${TARBALL} via OIDC trusted publishing"
-          npm publish
+          # A prerelease (any version with a hyphen, e.g. 0.11.0-next.0) goes
+          # under the `next` dist-tag so `latest` keeps pointing at the last
+          # final release; see docs/agents/publishing.md.
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          case "$PKG_VERSION" in
+            *-*) DIST_TAG=next ;;
+            *)   DIST_TAG=latest ;;
+          esac
+          echo "::notice::ARMED — publishing ${TARBALL} (${PKG_VERSION}) via OIDC trusted publishing under dist-tag ${DIST_TAG}"
+          npm publish --tag "$DIST_TAG"

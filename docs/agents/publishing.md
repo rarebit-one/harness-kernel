@@ -48,3 +48,15 @@ job queued forever with **nothing red**. The fix was deleting the repo variable
 so `runs-on` falls through to the workflows' `|| 'ubuntu-latest'` fallback,
 which costs nothing: public repos get unlimited hosted minutes. **Any repo that
 goes public next needs the same variable removed, in the same breath.**
+
+## Prereleases
+
+A consumer that needs a slice before the minor is final gets a prerelease:
+`npm version 0.11.0-next.0 --no-git-tag-version`, merge, tag `v0.11.0-next.0`,
+arm, cut a GitHub **prerelease**, disarm. `publish.yml` publishes a hyphenated
+version under the **`next` dist-tag** (`npm publish --tag next`) and anything
+else under `latest`, so `npm install @rarebit-one/harness-kernel` keeps
+resolving to the last final release and a `^0.10.0` range never picks up a
+`0.11.0-next.*`. Consumers opt in by exact version
+(`"@rarebit-one/harness-kernel": "0.11.0-next.0"`) or `@next`. Fixes land as
+`-next.1`, `-next.2`; the final `0.11.0` is a normal release.

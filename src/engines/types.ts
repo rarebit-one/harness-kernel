@@ -1,5 +1,6 @@
 import type { RunEventSink, RunOutcome } from "../events.js"
 import type { ProviderSelection } from "../providers/index.js"
+import type { ProviderOptions } from "../providers/options.js"
 import type { ConnectorConfig, Permissions, WorkflowDefinition } from "../types.js"
 import type { Isolation } from "./isolation.js"
 
@@ -37,6 +38,13 @@ export interface RunSpec {
   provider: { preferred?: string | null } & ProviderSelection
   /** Optional budget overrides; engines that don't honour these ignore them. */
   limits?: { maxSteps?: number; maxDurationMs?: number }
+  /**
+   * Per-call provider options for the run's model calls (prompt caching,
+   * token cap, OpenRouter routing). The native engine sends them on every
+   * call; an out-of-process engine, which brings its own model client,
+   * ignores them like it ignores `limits`.
+   */
+  providerOptions?: ProviderOptions
   /**
    * How strongly the caller isolated this run from every other run on the host:
    * `none` (a shared process), `container` (one per run) or `vm` (a microVM per
@@ -117,6 +125,17 @@ export interface EngineResult {
    * `failed`). Optional so an engine that cannot tell stays honest by omitting it.
    */
   outcome?: RunOutcome
+  /**
+   * The adapter that served the run (`"anthropic"`, `"openrouter"`, `"mock"`,
+   * …), observed from inside the run rather than predicted from its inputs.
+   * The native engine always reports it; an out-of-process engine brings its
+   * own model and credential, so it omits it rather than guess.
+   */
+  provider?: string
+  /** The model id the run's last response named, else the adapter's configured model. */
+  model?: string
+  /** Behind an aggregator, the upstream that served the run's last response. */
+  upstream?: string
 }
 
 /** The outcome of an engine's capability check for a given run. */

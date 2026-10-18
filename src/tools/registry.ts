@@ -200,17 +200,26 @@ export function primitiveTools(
   return allowed ? all.filter((t) => allowed.includes(t.spec.name)) : all
 }
 
+/** How a connector's tool is named for the model. The default namespaces it. */
+export type ConnectorToolName = (connectorName: string, toolName: string) => string
+
+/** The default: `<connector>__<tool>`, so two connectors cannot collide. */
+export const namespacedToolName: ConnectorToolName = (connector, tool) => `${connector}__${tool}`
+
 /**
- * Tools exposed by the run's MCP connectors. Each connector's tools are
- * namespaced `<connector>__<tool>` to avoid collisions. Returns a `close` to
- * tear down the connections when the run ends.
+ * Tools exposed by the run's MCP connectors. Each connector's tools are named
+ * `<connector>__<tool>` by default so two connectors cannot collide; pass
+ * `toolName` to name them differently (a single-connector application may
+ * want the server's own names, so its prompts and its tool names match).
+ * Returns a `close` to tear down the connections when the run ends.
  */
 export async function connectorTools(
   connectors: ConnectorConfig[],
   connect: (config: ConnectorConfig) => Promise<McpConnection> = connectMcp,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; toolName?: ConnectorToolName } = {},
 ): Promise<{ tools: Tool[]; close: () => Promise<void> }> {
   const { signal } = opts
+  const nameFor = opts.toolName ?? namespacedToolName
   const connections: McpConnection[] = []
   // Each setup await stops waiting the moment `signal` aborts, so a stalled
   // server cannot hold a canceled run; the catch below then closes every
@@ -250,7 +259,7 @@ export async function connectorTools(
       for (const tool of listed.tools ?? []) {
         tools.push({
           spec: {
-            name: `${config.name}__${tool.name}`,
+            name: nameFor(config.name, tool.name),
             description: tool.description ?? `${config.name} tool ${tool.name}`,
             inputSchema: tool.inputSchema ?? { type: "object" },
           },

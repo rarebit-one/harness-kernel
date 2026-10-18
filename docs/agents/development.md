@@ -25,8 +25,10 @@ npm run build          # tsc -p tsconfig.build.json → dist/ + .d.ts
 ```
 
 The offline **`mock` provider** is deliberate: the entire loop runs with **no API
-keys and no network** (`selectProvider` falls back to it when no key is set).
-Don't add tests that require a live provider key.
+keys and no network** when a run asks for it (`preferred: "mock"`, or
+`allowMockFallback` on the selection). Since 0.11 a keyless run no longer lands
+on it by accident: `selectProvider` throws. Don't add tests that require a live
+provider key; use `ScriptedProvider` when a test needs scripted tool calls.
 
 
 ## Git hooks (lefthook)

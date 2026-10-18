@@ -65,7 +65,19 @@ Moved verbatim from the former `CLAUDE.md`; `AGENTS.md` keeps a one-line summary
   gets.
 - **Fail loud, never silently degrade.** `AgentEngine.supports()` returns a
   reason and the caller fails the run; capabilities reject cross-workspace calls
-  outright. The one deliberate exception is the offline `mock` provider fallback.
+  outright; `selectProvider` throws a `ProviderCredentialsError` when the
+  preferred provider has no credential (it does not fall through to another
+  provider, and it does not fall back to the mock); an adapter throws a
+  `ProviderOptionsError` on an option addressed to a different adapter. The
+  offline mock is reached only by request (`preferred: "mock"`) or by the
+  explicit `allowMockFallback` opt-in. Until 0.11 the mock fallback was "the
+  one deliberate exception", and it cost a consumer a prediction module
+  (`effectiveProvider.ts`) just to tell a mocked run from a real one.
+- **The loop acts on exactly one piece of tool metadata: `dispatch`.** Every
+  other `ToolMetadata` field is descriptive and left to the application; where
+  a call ends up (`execute` / `terminal` / `external`) is control flow, and
+  control flow is the loop's. A second field the loop reads is the tell that
+  policy is leaking in.
 - **TypeScript strict**; `tsc --noEmit` and `eslint` must be clean (CI gates
   both, plus `prettier --check` and the `dist/index.d.ts` emit check).
 - **`moduleResolution: NodeNext`** — every relative import carries an explicit

@@ -8,9 +8,10 @@ import type {
 import type { ProviderSelection } from "./index.js"
 
 /**
- * Deterministic, offline provider. Used when no API key is configured — or when a
- * workflow explicitly asks for `preferred: mock` — so the end-to-end loop (and
- * tests) run without network access or credentials.
+ * Deterministic, offline provider. Used when a workflow explicitly asks for
+ * `preferred: mock`, or when a caller opts into `allowMockFallback` and no key
+ * is configured, so the end-to-end loop (and tests) run without network access
+ * or credentials. It accepts and ignores `providerOptions`: it is the dry run.
  *
  * It cannot call a model, but it is handed the SAME provider selection a real
  * provider would receive (the resolved per-run model + per-org BYO keys) and
@@ -21,10 +22,13 @@ import type { ProviderSelection } from "./index.js"
  */
 export class MockProvider implements Provider {
   readonly name = "mock"
+  /** The model the caller resolved, when it resolved one; the mock calls nothing. */
+  readonly model?: string
   private readonly selection: ProviderSelection
 
   constructor(selection: ProviderSelection = {}) {
     this.selection = selection
+    if (selection.model) this.model = selection.model
   }
 
   // "What a real provider would have used" for the model: the model the caller

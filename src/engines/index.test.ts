@@ -46,8 +46,49 @@ describe("selectEngine", () => {
 })
 
 describe("NativeEngine.supports", () => {
-  it("always supports a run (the primitives are the isolation boundary)", () => {
+  const saved = { ...process.env }
+  afterEach(() => {
+    process.env = { ...saved }
+  })
+
+  it("supports a run with no spec (the primitives are the isolation boundary)", () => {
     expect(new NativeEngine().supports()).toEqual({ ok: true })
+  })
+
+  it("refuses a run whose provider has no credential, with the reason, before anything is prepared", () => {
+    delete process.env.ANTHROPIC_API_KEY
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENROUTER_API_KEY
+    const refused = new NativeEngine().supports(spec({ provider: { preferred: "anthropic" } }))
+    expect(refused.ok).toBe(false)
+    expect(!refused.ok && refused.reason).toMatch(/ANTHROPIC_API_KEY/)
+    expect(new NativeEngine().supports(spec({ provider: {} })).ok).toBe(false)
+  })
+
+  it("runs a keyless spec on the mock when allowMockFallback is set, end to end", async () => {
+    delete process.env.ANTHROPIC_API_KEY
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENROUTER_API_KEY
+    // `supports()` and `run()` must judge the same selection: a run the first
+    // accepted because of the opt-in cannot then throw inside the second.
+    const run = spec({ provider: { preferred: "anthropic", allowMockFallback: true } })
+    const engine = new NativeEngine()
+    expect(engine.supports(run)).toEqual({ ok: true })
+    const result = await engine.run(run, { log: () => {} })
+    expect(result.provider).toBe("mock")
+    expect(result.outcome).toBe("completed")
+  })
+
+  it("accepts the mock by request or by explicit fallback opt-in", () => {
+    delete process.env.ANTHROPIC_API_KEY
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENROUTER_API_KEY
+    expect(new NativeEngine().supports(spec({ provider: { preferred: "mock" } }))).toEqual({
+      ok: true,
+    })
+    expect(new NativeEngine().supports(spec({ provider: { allowMockFallback: true } }))).toEqual({
+      ok: true,
+    })
   })
 })
 

@@ -79,6 +79,20 @@ describe("connectorTools", () => {
     await close()
   })
 
+  it("names tools through the caller's hook when one is given", async () => {
+    const conn: McpConnection = {
+      listTools: async () => ({ tools: [{ name: "book_visit", inputSchema: { type: "object" } }] }),
+      callTool: async () => ({}),
+      close: async () => {},
+    }
+    const { tools } = await connectorTools(
+      [{ name: "rails", kind: "mcp", transport: "streamable_http", endpoint: "https://x" }],
+      async () => conn,
+      { toolName: (_connector, tool) => tool },
+    )
+    expect(tools.map((t) => t.spec.name)).toEqual(["book_visit"])
+  })
+
   it("ignores non-mcp connectors", async () => {
     const { tools } = await connectorTools([
       { name: "x", kind: "http", transport: "streamable_http", endpoint: "https://x" },

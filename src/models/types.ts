@@ -57,6 +57,23 @@ export interface TokenUsage {
   cacheReadTokens?: number
   /** Input tokens written to a prompt cache — a subset of `inputTokens`. */
   cacheWriteTokens?: number
+  /** Output tokens spent on reasoning — a subset of `outputTokens`, when the provider breaks it out. */
+  reasoningTokens?: number
+  /**
+   * What the provider or gateway itself billed for the call, when it reports
+   * one (OpenRouter `usage.cost`, in US dollars). Absent when the provider does
+   * not price the call in its response; a consumer enforcing a cost cap treats
+   * absent as "unknown", never as free. Summed across a run by amount; every
+   * reporter today bills in USD, and a second currency would be a new value
+   * here rather than a silent mix.
+   */
+  reportedCost?: ReportedCost
+}
+
+/** A cost the provider reported, with its currency named so it is never a bare number. */
+export interface ReportedCost {
+  amount: number
+  currency: "USD"
 }
 
 /**

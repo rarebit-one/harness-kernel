@@ -392,3 +392,45 @@ describe("selectEngine forwards context providers to the native engine", () => {
     expect(lines).toContain("context: 1 fragment(s) from 1 provider(s)")
   })
 })
+
+describe("privateRunChannels: 0.11 fields", () => {
+  it("keeps the served model id and the stop reason, which are structural", () => {
+    const { sink, events } = recordRunEvents()
+    const channels = privateRunChannels(() => {}, sink)
+    channels.emit({ seq: 0, at: 1, type: "run.started", maxSteps: 1, maxDurationMs: 1, tools: [] })
+    channels.emit({
+      seq: 1,
+      at: 2,
+      type: "model.turn",
+      step: 0,
+      text: "secret prose",
+      toolCalls: [],
+      model: "local-model-7b",
+    })
+    channels.emit({
+      seq: 2,
+      at: 3,
+      type: "run.finished",
+      outcome: "completed",
+      stopReason: "terminal_tool",
+      steps: 1,
+      text: "secret",
+    })
+
+    expect(events[1]).toMatchObject({ type: "model.turn", text: "", model: "local-model-7b" })
+    expect(events[2]).toMatchObject({ outcome: "completed", stopReason: "terminal_tool" })
+    expect(events[2]).not.toHaveProperty("text")
+  })
+
+  it("drops a stop reason it does not know rather than forwarding a custom loop's word", () => {
+    const { sink, events } = recordRunEvents()
+    privateRunChannels(() => {}, sink).emit({
+      seq: 0,
+      at: 1,
+      type: "run.finished",
+      outcome: "completed",
+      stopReason: "made_up" as never,
+    })
+    expect(events[0]).not.toHaveProperty("stopReason")
+  })
+})

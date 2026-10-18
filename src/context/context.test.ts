@@ -15,7 +15,9 @@ function spec(overrides: Partial<RunSpec> = {}): RunSpec {
     permissions: {},
     secrets: {},
     connectors: [],
-    provider: {},
+    // The offline mock, by request: since 0.11 a keyless run fails loud
+    // instead of landing on it.
+    provider: { preferred: "mock" },
     ...overrides,
   }
 }

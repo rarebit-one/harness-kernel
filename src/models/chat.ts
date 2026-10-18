@@ -1,3 +1,4 @@
+import type { ProviderOptions } from "../providers/options.js"
 import type {
   AgentMessage,
   ConverseRequest,
@@ -98,13 +99,23 @@ export function chatModel(provider: Provider, caps: Partial<ModelCaps> = {}): Ch
       }
       ctx.signal?.throwIfAborted()
 
-      const converseReq = { system: req.system, messages: req.messages, tools: req.tools }
+      const converseReq: ConverseRequest = {
+        system: req.system,
+        messages: req.messages,
+        tools: req.tools,
+        ...(req.providerOptions ? { providerOptions: req.providerOptions } : {}),
+      }
       // The signal rides through to the provider's HTTP call, so an abort stops
       // the request in flight rather than after it returns. Passed only when
       // present so a provider with a one-argument `converse` sees no change.
-      const value = ctx.signal
+      const answered = ctx.signal
         ? await provider.converse(converseReq, { signal: ctx.signal })
         : await provider.converse(converseReq)
+      // The effective model: what the response named, else what the adapter
+      // was configured with. A custom provider that declares neither reports
+      // none, which is honest rather than invented.
+      const model = answered.model ?? provider.model
+      const value: ChatResponse = model !== undefined ? { ...answered, model } : answered
       return { value, ...(value.usage ? { usage: value.usage } : {}) }
     },
 
@@ -136,6 +147,13 @@ export function chatRequest(
   messages: AgentMessage[],
   tools: ToolSpec[],
   parts?: ChatPart[],
+  providerOptions?: ProviderOptions,
 ): ChatRequest {
-  return { system, messages, tools, ...(parts?.length ? { parts } : {}) }
+  return {
+    system,
+    messages,
+    tools,
+    ...(parts?.length ? { parts } : {}),
+    ...(providerOptions ? { providerOptions } : {}),
+  }
 }

@@ -3,7 +3,7 @@ import { assembleContext, renderContext, type ContextProvider } from "../context
 import { runEventEmitter } from "../events.js"
 import { nativeLoop, runWithEvents, type Loop } from "../loop.js"
 import { asChatModel } from "../models/chat.js"
-import { selectProvider } from "../providers/index.js"
+import { providerAvailability, selectProvider } from "../providers/index.js"
 import { secretsToEnv } from "../secrets.js"
 import { primitiveTools, connectorTools } from "../tools/registry.js"
 import { PrivateRunError, privateRunChannels } from "../private.js"
@@ -61,6 +61,11 @@ export class NativeEngine implements AgentEngine {
   }
 
   /**
+   * A run is refused here, with a reason, when its provider cannot be resolved
+   * to a credential: the same check `selectProvider` makes, surfaced before any
+   * sandbox is prepared. Set `provider.allowMockFallback` (or
+   * `provider.preferred: "mock"`) to run offline instead.
+   *
    * A private run must stay on local inference, and that is a guarantee, not a
    * preference: it is refused unless the run names the `local` provider AND the
    * host has one configured. There is no fallback to a cloud provider found in
@@ -68,8 +73,9 @@ export class NativeEngine implements AgentEngine {
    * that silently ran somewhere else, or not at all, would look like it worked.
    */
   supports(spec?: RunSpec): EngineSupport {
-    if (spec?.private) return privateProviderSupport(spec)
-    return { ok: true }
+    if (!spec) return { ok: true }
+    if (spec.private) return privateProviderSupport(spec)
+    return providerAvailability(spec.provider.preferred, spec.provider)
   }
 
   async run(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {
@@ -111,10 +117,10 @@ export class NativeEngine implements AgentEngine {
     // never started its loop, so it emits no events.
     if (ctx.signal?.aborted) return canceledBeforeLoop(ctx)
 
-    const provider = selectProvider(spec.provider.preferred, {
-      model: spec.provider.model,
-      credentials: spec.provider.credentials,
-    })
+    // The whole selection, not a hand-picked subset: `supports()` judged the
+    // run on `spec.provider` (including `allowMockFallback`), so `run()` must
+    // resolve it from the same object or the two can disagree.
+    const provider = selectProvider(spec.provider.preferred, spec.provider)
     // Belt and braces for the private path: whatever selection did, a private
     // run proceeds on the local provider or not at all.
     if (spec.private && provider.name !== "local") {
@@ -159,14 +165,16 @@ export class NativeEngine implements AgentEngine {
         if (!ctx.signal?.aborted) throw err
         return canceledBeforeLoop(ctx)
       }
+      const model = asChatModel(provider)
       const result = await runWithEvents(
         this.loop,
         {
-          model: asChatModel(provider),
+          model,
           system: buildSystemPrompt(spec.workflow, spec.workspaceId, spec.workflowPath),
-          userPrompt: buildUserPrompt(spec.workflow, context, spec.inputs),
+          messages: [{ role: "user", text: buildUserPrompt(spec.workflow, context, spec.inputs) }],
           tools,
           limits: resolveLoopLimits(spec.limits),
+          ...(spec.providerOptions ? { providerOptions: spec.providerOptions } : {}),
         },
         // The bookends come from `runWithEvents`, so an application's own loop
         // gets them without having to know they exist.
@@ -177,7 +185,16 @@ export class NativeEngine implements AgentEngine {
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         },
       )
-      return { text: result.text, outcome: result.outcome }
+      // Observed, not predicted: the loop says what served it. A custom loop
+      // that reports nothing falls back to the adapter this engine selected.
+      const served = result.model ?? provider.model
+      return {
+        text: result.text,
+        outcome: result.outcome,
+        provider: result.provider ?? model.id,
+        ...(served !== undefined ? { model: served } : {}),
+        ...(result.upstream !== undefined ? { upstream: result.upstream } : {}),
+      }
     } finally {
       // Connectors are only needed during the loop; close them here (the engine
       // opened them) regardless of how run() exits.

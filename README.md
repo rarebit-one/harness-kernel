@@ -46,9 +46,9 @@ ESM-only, Node >= 22.
 | Area | Exports |
 |------|---------|
 | **Model seam** | `ModelInvocation` — one arrow for every model kind, with declared capabilities, a uniform result envelope and `probe()` |
-| **Providers** | `Provider` interface + `selectProvider()` over Anthropic, OpenAI, OpenRouter, a self-hosted `local` (any OpenAI-compatible server), and an offline `mock`; `chatModel()` puts any of them on the seam |
-| **Agent loop** | `runAgent()` — a provider-neutral tool-use loop with step and wall-clock budgets, cancellable through an `AbortSignal` |
-| **Loop** | `Loop` + `nativeLoop` — the control loop as a seam; the kernel ships one and it is the loop `runAgent` has always run |
+| **Providers** | `Provider` interface + `selectProvider()` over Anthropic, OpenAI, OpenRouter, a self-hosted `local` (any OpenAI-compatible server), an offline `mock` (by request) and a `ScriptedProvider` for recorded evals; `chatModel()` puts any of them on the seam; typed per-call `ProviderOptions` (prompt caching, token cap, response format, OpenRouter routing) |
+| **Agent loop** | `runConversation()` — a provider-neutral tool-use loop over a seeded conversation, with step and wall-clock budgets, terminal (final-answer) tools, summed usage and the served model in the result; `runAgent()` is its one-prompt form |
+| **Loop** | `Loop` + `nativeLoop` — the control loop as a seam; the kernel ships one and it is the loop `runAgent` and `runConversation` have always run |
 | **Run events** | `RunEvent` — an ordered, structured account of a run (turns, tool calls, budgets, outcome), emitted to an optional sink |
 | **Tools** | `Tool` (+ `ToolContext`), `primitiveTools()` (`run_code`, `read_file`, `list_files`, `http_fetch`), `connectorTools()`, `modelAsTool()`, metadata + projections (`replaySafeTools`, …) |
 | **Connectors** | `connectMcp()` — MCP clients over stdio / streamable HTTP / SSE |
@@ -297,9 +297,145 @@ const text = await runAgent({
 })
 ```
 
-With no provider API key configured, `selectProvider` falls back to the offline
-`mock` provider — so the whole loop runs end to end with no keys and no network.
-That is deliberate: the test suite depends on it, and so can yours.
+**`selectProvider` fails loud.** A preferred provider with no credential, or no
+preference and no credential at all, throws a `ProviderCredentialsError` naming
+the env var and the BYO slot that would have satisfied it; it never falls
+through to another configured provider, and a name it does not know (a typo, a
+provider with no adapter) is refused the same way rather than read as "no
+preference". `providerAvailability()` gives the same
+answer as a reason instead of a throw, and `NativeEngine.supports()` uses it, so
+a run with no key is refused before a sandbox is prepared. The offline `mock`
+is reached only by request (`selectProvider("mock")`) or by explicit opt-in
+(`{ allowMockFallback: true }`), which is what a keyless test rig sets. Until
+0.11 a keyless run landed on the mock silently and reported success; nothing on
+the wire told that run from a real one.
+
+### Conversations and terminal tools
+
+`runAgent` is single-shot. A conversational application seeds the loop with its
+stored history and gets the whole transcript back:
+
+```ts
+import { runConversation, terminalTool } from "@rarebit-one/harness-kernel"
+
+const reply = terminalTool({
+  name: "reply",
+  description: "Send the final answer to the user.",
+  inputSchema: {
+    type: "object",
+    properties: { text: { type: "string" }, quick_replies: { type: "array", items: { type: "string" } } },
+    required: ["text"],
+  },
+})
+
+const result = await runConversation({
+  provider,
+  system,
+  messages: [...storedHistory, { role: "user", text: incoming }],
+  tools: [...lookupTools, reply],
+  providerOptions: { promptCache: {} },
+})
+
+result.stopReason // "end_turn" | "terminal_tool" | "steps_exhausted" | "timed_out" | "canceled"
+result.terminal?.input // { text, quick_replies } when the model called `reply`
+result.messages // store this; seed the next turn with it
+result.usage // summed over every model call
+result.provider, result.model // what actually served the run
+```
+
+A tool with `meta.dispatch: "terminal"` is a **final-answer tool**: the loop
+still runs its executor (so it can validate, or send), appends the tool result
+so the transcript carries no dangling call, and then ends the run with
+`stopReason: "terminal_tool"` and the call on `result.terminal`. An executor
+that throws turns the call into an ordinary tool error the model gets to
+correct. `terminalTool()` builds one with a no-op executor; the structured
+answer is the call's `input`, which the kernel does not validate against the
+schema (run your own validator on it, or supply an executor that throws).
+
+The seed must end with a user message or with the tool results the model is
+waiting for; the loop copies it and never mutates the array it was handed.
+`result.events` is this call's event stream (the same events reached `emit`),
+recorded for a caller with nowhere else to put them; the kernel still stores
+nothing between calls.
+
+`dispatch: "external"` is reserved for a tool the *caller* executes: the loop
+would return the pending call and resume when given its result. The native
+loop refuses it today (a custom `Loop` may honour it); native suspend/resume is
+a later release.
+
+### Provider options and prompt caching
+
+`providerOptions` rides on every model call a run makes and each adapter maps it
+onto its own wire format. An option an adapter cannot honour throws a
+`ProviderOptionsError` rather than being dropped.
+
+```ts
+providerOptions: {
+  maxTokens: 1024,                       // per-call completion cap
+  promptCache: { ttl: "1h" },            // system + tools + last message cached
+  responseFormat: { type: "json_object" }, // OpenAI-compatible adapters only
+  openrouter: {                          // OpenRouter adapter only
+    models: ["anthropic/claude-sonnet-4.5", "openai/gpt-4.1"], // fallbacks
+    provider: { data_collection: "deny", zdr: true },         // data policy
+    usage: { include: true },
+  },
+}
+```
+
+`promptCache: {}` means "cache this prompt the usual way". On **Anthropic** that
+is a `cache_control` breakpoint on the system prompt, the last tool definition
+and the last message (`trailingMessages` up to 2, `ttl` `5m` or `1h`). On
+**OpenRouter** the breakpoints go on the system prompt and the trailing
+messages as content parts, which the upstreams that cache (Anthropic, Gemini)
+honour. On **OpenAI** caching is automatic, so only `promptCache.key` does
+anything (it becomes `prompt_cache_key`). The `local` adapter accepts it and
+lets the server's own prefix cache do the work.
+
+Every result reports what served it: `ConverseResult.model` is the model id the
+response named (with a fallback list it can differ from the one requested),
+`responseId` is the provider's own id for the response (a generation id on
+OpenRouter), and, behind OpenRouter, `upstream` names who actually processed the
+prompt, which is what a zero-data-retention audit needs. `model.turn` events
+carry `model`, `responseId` and `upstream` too; `ConversationResult.responseIds`
+lists every id in call order and `ConversationResult.upstream` names who served
+the last turn, so a cross-vendor fallback chain can still be audited.
+
+The package also exports its own `package.json`
+(`import pkg from "@rarebit-one/harness-kernel/package.json" with { type: "json" }`)
+so a service can report the kernel version it runs.
+
+Usage carries what the provider prices: beside the token counts, `TokenUsage`
+has `cacheWriteTokens`, `reasoningTokens` and `reportedCost`
+(`{ amount, currency: "USD" }`, from OpenRouter's `usage.cost`) when the
+response reports them, on every `model.turn` event and summed by amount on the
+result, so a per-turn cost cap can abort the run through its `signal`. Absent
+means unknown, never free.
+
+Two more per-call knobs: `maxRetries` overrides the SDK retry count for one
+call (set `0` alongside an OpenRouter `models` chain, or the SDK and the router
+both retry), and the `openai` adapter sends the cap as `max_completion_tokens`
+(its current field; reasoning models reject `max_tokens`) while OpenRouter and
+local servers get `max_tokens`. `connectorTools(..., { toolName })` names MCP
+tools your way when the default `<connector>__<tool>` prefix is in the way.
+
+### Recorded evals with `ScriptedProvider`
+
+```ts
+import { ScriptedProvider } from "@rarebit-one/harness-kernel"
+
+const provider = new ScriptedProvider([
+  { text: "", toolCalls: [{ id: "c1", name: "lookup", input: { q: "balance" } }] },
+  (req) => ({ text: "", toolCalls: [{ id: "r1", name: "reply", input: { text: "S$120" } }] }),
+])
+const result = await runConversation({ provider, system, messages, tools })
+provider.requests // every request the loop built, for assertions
+provider.remaining // 0 when the whole script was consumed; a longer loop throws
+```
+
+It plays a recorded script of model turns in order, records each request it was
+given, honours `signal`, and throws `ScriptExhaustedError` rather than invent a
+turn, so an eval that drifts from its recording fails instead of passing
+quietly.
 
 **Self-hosted (`local`).** `selectProvider("local")` runs against any
 OpenAI-compatible server — llama-server, vLLM, LM Studio, Ollama's OpenAI
