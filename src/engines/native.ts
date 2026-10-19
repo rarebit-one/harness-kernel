@@ -191,6 +191,8 @@ export class NativeEngine implements AgentEngine {
       return {
         text: result.text,
         outcome: result.outcome,
+        ...(result.stopReason !== undefined ? { stopReason: result.stopReason } : {}),
+        ...(result.finishReason !== undefined ? { finishReason: result.finishReason } : {}),
         provider: result.provider ?? model.id,
         ...(served !== undefined ? { model: served } : {}),
         ...(result.upstream !== undefined ? { upstream: result.upstream } : {}),

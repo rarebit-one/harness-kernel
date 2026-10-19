@@ -62,3 +62,14 @@ describe("MockProvider", () => {
     expect(text).toContain("org BYO key: (none — runner env key would be used)")
   })
 })
+
+describe("MockProvider finish reason", () => {
+  it("always reports stop: the mock never calls tools and is never cut off", async () => {
+    const { finishReason } = await new MockProvider().converse({
+      system: "s",
+      messages: [{ role: "user", text: "hi" }],
+      tools: [],
+    })
+    expect(finishReason).toBe("stop")
+  })
+})

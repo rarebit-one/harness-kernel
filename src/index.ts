@@ -22,6 +22,7 @@ export type {
   PromptCacheOptions,
   CacheTtl,
   ResponseFormat,
+  ToolChoice,
   OpenRouterOptions,
   OpenRouterProviderPreferences,
 } from "./providers/options.js"
@@ -35,6 +36,7 @@ export type {
   ToolSpec,
   ToolCall,
   ToolResult,
+  FinishReason,
 } from "./providers/types.js"
 export { AnthropicProvider } from "./providers/anthropic.js"
 export { OpenAIProvider, OpenAICompatibleProvider } from "./providers/openai.js"
@@ -113,7 +115,14 @@ export type { ContextProvider, ContextFragment, ContextSpec } from "./context/ty
 // ---------------------------------------------------------------------------
 // The tool-use loop
 // ---------------------------------------------------------------------------
-export { runAgent, runConversation, maxToolResultBytes, resolveLoopLimits } from "./agent.js"
+export {
+  runAgent,
+  runConversation,
+  isTruncatedCall,
+  TruncatedAnswerError,
+  maxToolResultBytes,
+  resolveLoopLimits,
+} from "./agent.js"
 export type {
   RunAgentOptions,
   RunConversationOptions,

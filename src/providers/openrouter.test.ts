@@ -125,7 +125,9 @@ describe("openrouter converse (shared OpenAI-compatible core)", () => {
       ],
     })
     expect(result.text).toBe("on it")
-    expect(result.toolCalls).toEqual([{ id: "t1", name: "run_code", input: { command: "ls" } }])
+    expect(result.toolCalls).toEqual([
+      { id: "t1", name: "run_code", input: { command: "ls" }, argumentsText: '{"command":"ls"}' },
+    ])
   })
 
   it("surfaces a refusal as text like the OpenAI provider", async () => {
@@ -140,7 +142,7 @@ describe("openrouter converse (shared OpenAI-compatible core)", () => {
       tools: [],
     })
 
-    expect(result).toEqual({ text: "Refused: nope", toolCalls: [] })
+    expect(result).toMatchObject({ text: "Refused: nope", toolCalls: [] })
   })
 
   it("sends the configured RUNNER_MAX_TOKENS as max_tokens", async () => {

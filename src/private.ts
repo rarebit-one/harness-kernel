@@ -33,6 +33,7 @@
  */
 
 import type { RunEvent, RunEventSink, StopReason } from "./events.js"
+import type { FinishReason } from "./providers/types.js"
 import type { TokenUsage, Usage } from "./models/types.js"
 
 /** What every withheld string field is replaced with. */
@@ -128,6 +129,7 @@ export function privateRunChannels(
           // The served model id and upstream are configuration echoed back, not material.
           ...(typeof event.model === "string" ? { model: event.model } : {}),
           ...(typeof event.upstream === "string" ? { upstream: event.upstream } : {}),
+          ...(isFinishReason(event.finishReason) ? { finishReason: event.finishReason } : {}),
         }
       }
       case "model.turn.failed":
@@ -199,12 +201,19 @@ export function privateRunChannels(
   }
 }
 
-const FAILURE_REASONS = ["threw", "unknown_tool", "aborted"] as const
+const FAILURE_REASONS = ["threw", "unknown_tool", "aborted", "truncated"] as const
+const FINISH_REASONS = ["stop", "tool_calls", "length", "content_filter", "unknown"] as const
+
+/** A known finish reason; anything else is dropped. */
+function isFinishReason(value: unknown): value is FinishReason {
+  return typeof value === "string" && (FINISH_REASONS as readonly string[]).includes(value)
+}
 const BUDGET_KINDS = ["steps", "duration"] as const
 const OUTCOMES = ["completed", "steps_exhausted", "timed_out", "canceled", "failed"] as const
 const STOP_REASONS = [
   "end_turn",
   "terminal_tool",
+  "length",
   "steps_exhausted",
   "timed_out",
   "canceled",

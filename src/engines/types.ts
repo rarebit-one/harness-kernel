@@ -1,6 +1,7 @@
-import type { RunEventSink, RunOutcome } from "../events.js"
+import type { RunEventSink, RunOutcome, StopReason } from "../events.js"
 import type { ProviderSelection } from "../providers/index.js"
 import type { ProviderOptions } from "../providers/options.js"
+import type { FinishReason } from "../providers/types.js"
 import type { ConnectorConfig, Permissions, WorkflowDefinition } from "../types.js"
 import type { Isolation } from "./isolation.js"
 
@@ -125,6 +126,16 @@ export interface EngineResult {
    * `failed`). Optional so an engine that cannot tell stays honest by omitting it.
    */
   outcome?: RunOutcome
+  /**
+   * One level finer than `outcome`, when the engine's loop reported it. A
+   * `completed` run with `stopReason: "length"` is a prose answer the output
+   * cap cut short, which a caller must not apply as if it were whole; the
+   * native engine always sets this, so that distinction reaches the engine
+   * API and not only `runConversation`.
+   */
+  stopReason?: StopReason
+  /** Why the last model call stopped generating, when reported. */
+  finishReason?: FinishReason
   /**
    * The adapter that served the run (`"anthropic"`, `"openrouter"`, `"mock"`,
    * …), observed from inside the run rather than predicted from its inputs.

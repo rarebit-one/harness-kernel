@@ -18,7 +18,14 @@ import { asChatModel, chatRequest, type ChatModel } from "./models/chat.js"
 import { deadlineSignal, isAbortError } from "./signals.js"
 import type { InvokeContext, TokenUsage, Usage } from "./models/types.js"
 import type { ProviderOptions } from "./providers/options.js"
-import type { AgentMessage, Provider, ToolResult, ToolSpec } from "./providers/types.js"
+import type {
+  AgentMessage,
+  FinishReason,
+  Provider,
+  ToolCall,
+  ToolResult,
+  ToolSpec,
+} from "./providers/types.js"
 import { executeTool, type Tool } from "./tools/registry.js"
 import { toToolSpecs, toolDispatch, type ToolMetadata } from "./tools/metadata.js"
 
@@ -115,6 +122,13 @@ export interface ConversationResult {
    * prompt reached. Absent for direct adapters.
    */
   upstream?: string
+  /**
+   * Why the last model call stopped generating. `length` together with
+   * `stopReason: "length"` is a cut-off prose answer; a cut-off tool call never
+   * becomes the answer (the loop refuses it), so after `terminal_tool` this is
+   * never `length`.
+   */
+  finishReason?: FinishReason
 }
 
 const DEFAULT_MAX_STEPS = 12
@@ -251,6 +265,29 @@ function addUsage(total: TokenUsage | undefined, next: Usage | undefined): Token
   return sum
 }
 
+/**
+ * A call whose raw arguments were cut off: the dialect delivered text and that
+ * text does not parse as a JSON object. The parsed `input` is `{}` in that
+ * case, which would run the tool with nothing, so the loop refuses the call
+ * instead. Empty or whitespace text is the ambiguous case: some upstreams emit
+ * it for a genuine zero-argument call, and a turn cut off before the JSON
+ * began looks identical. It is read as truncated only when the turn's
+ * `finishReason` is `length`, which is the one situation where the cut-off
+ * reading is the safe one. A dialect that delivers no text (Anthropic) cannot
+ * be judged here.
+ */
+export function isTruncatedCall(call: ToolCall, finishReason?: FinishReason): boolean {
+  const raw = call.argumentsText
+  if (raw === undefined) return false
+  if (raw.trim() === "") return finishReason === "length"
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return !(parsed !== null && typeof parsed === "object" && !Array.isArray(parsed))
+  } catch {
+    return true
+  }
+}
+
 /** The seed a loop can continue: non-empty, and not waiting on the caller. */
 function assertSeed(messages: AgentMessage[]): void {
   const last = messages[messages.length - 1]
@@ -273,6 +310,33 @@ function stopReasonFor(outcome: RunOutcome): StopReason {
 }
 
 /**
+ * Thrown by {@link runAgent} when the model's final prose was cut off at the
+ * output token cap (`stopReason: "length"`, or a budget summary that ended
+ * with `finishReason: "length"`). A bare string cannot say "this is not whole", and a caller
+ * that got one would apply it as an answer, so the single-shot form refuses
+ * instead. The partial text and the full result ride on the error for a
+ * caller that wants them; {@link runConversation} returns the same run with
+ * `stopReason: "length"` and never throws for it.
+ */
+export class TruncatedAnswerError extends Error {
+  /** The cut-off prose, exactly as the model left it. */
+  readonly text: string
+  /** The whole run, as `runConversation` would have returned it. */
+  readonly result: ConversationResult
+
+  constructor(result: ConversationResult) {
+    super(
+      "the answer was cut off at the output token limit and is not whole; raise " +
+        "providerOptions.maxTokens or use runConversation(), which returns the partial " +
+        'text with stopReason "length" instead of throwing',
+    )
+    this.name = "TruncatedAnswerError"
+    this.text = result.text
+    this.result = result
+  }
+}
+
+/**
  * Drives a provider-agnostic tool-use loop: the model converses, the runner
  * executes any requested tools in the sandbox, feeds the results back, and
  * repeats until the model stops calling tools (or the step budget is hit). The
@@ -280,7 +344,9 @@ function stopReasonFor(outcome: RunOutcome): StopReason {
  *
  * This is the single-shot form: one user prompt in, the final prose out. It is
  * {@link runConversation} with a one-message seed, kept because most callers
- * want exactly that and nothing more.
+ * want exactly that and nothing more. The one thing a string cannot carry is
+ * "cut off", so a `length` stop throws {@link TruncatedAnswerError} here
+ * rather than returning partial prose that reads as complete.
  */
 export async function runAgent(options: RunAgentOptions): Promise<string> {
   const { userPrompt, ...rest } = options
@@ -288,6 +354,15 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
     ...rest,
     messages: [{ role: "user", text: userPrompt }],
   })
+  // `stopReason: "length"` is the plain case; a budget summary cut at the cap
+  // ends `steps_exhausted` with `finishReason: "length"`, and its text is just
+  // as partial. A canceled or timed-out run is not judged here: the
+  // cancellation contract is that it resolves with its note, never rejects,
+  // even when the last turn to land before the stop happened to be cut.
+  const stopped = result.outcome === "canceled" || result.outcome === "timed_out"
+  if (!stopped && (result.stopReason === "length" || result.finishReason === "length")) {
+    throw new TruncatedAnswerError(result)
+  }
   return result.text
 }
 
@@ -346,6 +421,7 @@ export async function runConversation(
     responseIds: result.responseIds ?? [],
     ...(result.model !== undefined ? { model: result.model } : {}),
     ...(result.upstream !== undefined ? { upstream: result.upstream } : {}),
+    ...(result.finishReason !== undefined ? { finishReason: result.finishReason } : {}),
     ...(result.usage ? { usage: result.usage } : {}),
     ...(result.terminal ? { terminal: result.terminal } : {}),
   }
@@ -408,6 +484,8 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   let servedModel: string | undefined
   let servedUpstream: string | undefined
   let terminal: TerminalCall | undefined
+  let lastFinish: FinishReason | undefined
+  let cutOff = false
   const responseIds: string[] = []
 
   /** Everything a result carries besides the three the caller decides per path. */
@@ -421,6 +499,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
     responseIds,
     ...(servedModel !== undefined ? { model: servedModel } : {}),
     ...(servedUpstream !== undefined ? { upstream: servedUpstream } : {}),
+    ...(lastFinish !== undefined ? { finishReason: lastFinish } : {}),
     ...(usage ? { usage } : {}),
     // Only a run that ended BECAUSE of the terminal call reports it.
     ...(terminal && stopReason === "terminal_tool" ? { terminal } : {}),
@@ -477,6 +556,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
       servedModel = turn.model
       servedUpstream = turn.upstream
       if (turn.responseId) responseIds.push(turn.responseId)
+      lastFinish = turn.finishReason
       events.emit({
         type: "model.turn",
         step,
@@ -486,6 +566,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
         ...(turn.model ? { model: turn.model } : {}),
         ...(turn.responseId ? { responseId: turn.responseId } : {}),
         ...(turn.upstream ? { upstream: turn.upstream } : {}),
+        ...(turn.finishReason ? { finishReason: turn.finishReason } : {}),
       })
       // A model that ignored its signal can still answer after the stop. The
       // turn happened, so it is recorded above and its prose is kept, but the
@@ -501,6 +582,10 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
 
       if (calls.length === 0) {
         finalText = turn.text
+        // A prose answer the output cap cut short. The run still completes,
+        // but `stopReason: "length"` tells the caller not to apply the text
+        // as if it were whole.
+        cutOff = turn.finishReason === "length"
         break
       }
 
@@ -528,6 +613,37 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
             name: call.name,
             reason: "unknown_tool",
             error: `unknown tool: ${call.name}`,
+          })
+          continue
+        }
+        // A call the output cap cut off is never run and never an answer. A
+        // terminal call on a `length` turn is refused even when its arguments
+        // parsed: the turn was cut, so the answer cannot be trusted whole. On
+        // a `length` turn any other call runs only when its raw arguments are
+        // present and parse (proof it was whole); a dialect that delivers no
+        // raw text (Anthropic) cannot give that proof, so its calls on a cut
+        // turn are refused too. On a whole turn, only arguments that do not
+        // parse are refused, since running `{}` would be running something the
+        // model did not say. The model is told, and answers again within its
+        // budgets.
+        const cut = turn.finishReason === "length"
+        const refusal =
+          cut && toolDispatch(tool) === "terminal"
+            ? "answer cut off at the output token limit; it was not accepted. Answer again, more briefly."
+            : (cut && call.argumentsText === undefined) || isTruncatedCall(call, turn.finishReason)
+              ? "tool call arguments were cut off at the output token limit and did not parse; " +
+                "the call was not run. Call again, more briefly."
+              : undefined
+        if (refusal !== undefined) {
+          results.push({ toolCallId: call.id, content: refusal, isError: true })
+          log(`tool ${call.name} refused: truncated`)
+          events.emit({
+            type: "tool.failed",
+            step,
+            callId: call.id,
+            name: call.name,
+            reason: "truncated",
+            error: refusal,
           })
           continue
         }
@@ -651,6 +767,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
       servedModel = summary.model
       servedUpstream = summary.upstream
       if (summary.responseId) responseIds.push(summary.responseId)
+      lastFinish = summary.finishReason
       // Emitted like any other turn: `run.finished.text` can come from this
       // call, and a terminal event whose text traces back to no turn in the
       // transcript would break the stream's one promise.
@@ -663,6 +780,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
         ...(summary.model ? { model: summary.model } : {}),
         ...(summary.responseId ? { responseId: summary.responseId } : {}),
         ...(summary.upstream ? { upstream: summary.upstream } : {}),
+        ...(summary.finishReason ? { finishReason: summary.finishReason } : {}),
       })
       // The summary is part of the conversation too: a caller that stores
       // `messages` and resumes later should see what the model last said.
@@ -694,7 +812,13 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   // `steps_exhausted`, because the distinction is exactly what a consumer needs
   // to know about the trustworthiness of the answer.
   const outcome: RunOutcome = timedOut ? "timed_out" : exhausted ? "steps_exhausted" : "completed"
-  const stopReason: StopReason = timedOut ? "timed_out" : exhausted ? "steps_exhausted" : "end_turn"
+  const stopReason: StopReason = timedOut
+    ? "timed_out"
+    : exhausted
+      ? "steps_exhausted"
+      : cutOff
+        ? "length"
+        : "end_turn"
   // `runWithEvents` builds the terminal event from exactly this result, so the
   // return value and the stream cannot disagree — there is one source now, not
   // two that happen to be written from the same variables.

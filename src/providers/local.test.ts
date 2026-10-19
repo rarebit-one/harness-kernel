@@ -108,6 +108,8 @@ describe("local converse (shared OpenAI-compatible core)", () => {
       ],
     })
     expect(result.text).toBe("on it")
-    expect(result.toolCalls).toEqual([{ id: "t1", name: "run_code", input: { command: "ls" } }])
+    expect(result.toolCalls).toEqual([
+      { id: "t1", name: "run_code", input: { command: "ls" }, argumentsText: '{"command":"ls"}' },
+    ])
   })
 })

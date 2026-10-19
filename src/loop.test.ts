@@ -248,6 +248,36 @@ describe("NativeEngine loop seam", () => {
     expect(result.provider).toBe("mock")
   })
 
+  it("carries the loop's stopReason and finishReason onto the engine result", async () => {
+    // A cut-off prose answer is `completed` with `stopReason: "length"`; the
+    // engine API must say so too, not only runConversation.
+    const cut: Loop = {
+      name: "cut",
+      run: async () => ({
+        text: "once upon a ti",
+        steps: 1,
+        outcome: "completed",
+        stopReason: "length",
+        finishReason: "length",
+      }),
+    }
+    const result = await new NativeEngine({ loop: cut }).run(
+      spec({ provider: { preferred: "mock" } }),
+      { log: () => {} },
+    )
+    expect(result).toMatchObject({
+      outcome: "completed",
+      stopReason: "length",
+      finishReason: "length",
+    })
+    // The native loop reports them too.
+    const native = await new NativeEngine().run(spec({ provider: { preferred: "mock" } }), {
+      log: () => {},
+    })
+    expect(native.stopReason).toBe("end_turn")
+    expect(native.finishReason).toBe("stop")
+  })
+
   it("hands the loop the run's providerOptions and reports the model it was configured with", async () => {
     const seen: LoopRequest[] = []
     const stub: Loop = {

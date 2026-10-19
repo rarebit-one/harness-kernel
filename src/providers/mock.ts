@@ -103,6 +103,6 @@ export class MockProvider implements Provider {
       prompt,
     })
     opts?.signal?.throwIfAborted()
-    return { text, toolCalls: [] }
+    return { text, toolCalls: [], finishReason: "stop" }
   }
 }

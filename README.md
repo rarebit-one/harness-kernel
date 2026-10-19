@@ -358,6 +358,22 @@ waiting for; the loop copies it and never mutates the array it was handed.
 recorded for a caller with nowhere else to put them; the kernel still stores
 nothing between calls.
 
+**Cut-off answers are never answers.** Every `ConverseResult` carries a
+`finishReason` (`stop`, `tool_calls`, `length`, `content_filter`, `unknown`),
+mapped from Anthropic's `stop_reason` and the OpenAI dialect's `finish_reason`
+and echoed on `model.turn` and `ConversationResult.finishReason`. When a turn
+ends with `length`, a terminal call on it is refused even if its arguments
+parsed, and so is any call whose raw `argumentsText` does not parse: nothing
+runs, the model gets an error result saying so (`tool.failed` with reason
+`truncated`), and the loop continues so it can answer again within its budgets.
+A cut-off prose answer completes with `stopReason: "length"`, so a consumer can
+decline to apply text that is not whole; `runAgent()`, whose bare string could
+not say so, throws a `TruncatedAnswerError` (carrying the partial `text` and
+the full `result`) in that case instead. `ToolCall.argumentsText` is the exact
+bytes the model emitted (the OpenAI dialect keeps and replays them verbatim;
+Anthropic hands over an object and leaves it absent), and `ToolCall.meta` is an
+opaque per-call bag that rides through history for an adapter that needs it.
+
 `dispatch: "external"` is reserved for a tool the *caller* executes: the loop
 would return the pending call and resume when given its result. The native
 loop refuses it today (a custom `Loop` may honour it); native suspend/resume is
@@ -372,6 +388,8 @@ onto its own wire format. An option an adapter cannot honour throws a
 ```ts
 providerOptions: {
   maxTokens: 1024,                       // per-call completion cap
+  temperature: 0.2,
+  toolChoice: { name: "reply" },         // "auto" | "required" | "none" | { name }; omitted on a tools-free call
   promptCache: { ttl: "1h" },            // system + tools + last message cached
   responseFormat: { type: "json_object" }, // OpenAI-compatible adapters only
   openrouter: {                          // OpenRouter adapter only
