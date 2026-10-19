@@ -10,8 +10,21 @@ export type { ConnectorConfig, Permissions, WorkflowDefinition } from "./types.j
 // ---------------------------------------------------------------------------
 // Providers — the model adapters and their selection
 // ---------------------------------------------------------------------------
-export { selectProvider } from "./providers/index.js"
-export type { ProviderSelection } from "./providers/index.js"
+export {
+  selectProvider,
+  providerAvailability,
+  ProviderCredentialsError,
+} from "./providers/index.js"
+export type { ProviderSelection, ProviderAvailability } from "./providers/index.js"
+export { ProviderOptionsError, MAX_TRAILING_CACHE_MESSAGES } from "./providers/options.js"
+export type {
+  ProviderOptions,
+  PromptCacheOptions,
+  CacheTtl,
+  ResponseFormat,
+  OpenRouterOptions,
+  OpenRouterProviderPreferences,
+} from "./providers/options.js"
 export type {
   Provider,
   CompletionRequest,
@@ -30,6 +43,8 @@ export { OpenRouterProvider } from "./providers/openrouter.js"
 export type { OpenRouterAttribution } from "./providers/openrouter.js"
 export { LocalProvider, LOCAL_DEFAULT_MODEL } from "./providers/local.js"
 export { MockProvider } from "./providers/mock.js"
+export { ScriptedProvider, ScriptExhaustedError } from "./providers/scripted.js"
+export type { ScriptedTurn, ScriptedProviderOptions } from "./providers/scripted.js"
 
 // ---------------------------------------------------------------------------
 // The model seam — the neutral arrow every model kind is invoked through
@@ -51,6 +66,7 @@ export type {
   StreamSink,
   Usage,
   TokenUsage,
+  ReportedCost,
   UnitUsage,
   Health,
   HealthStatus,
@@ -97,14 +113,26 @@ export type { ContextProvider, ContextFragment, ContextSpec } from "./context/ty
 // ---------------------------------------------------------------------------
 // The tool-use loop
 // ---------------------------------------------------------------------------
-export { runAgent, maxToolResultBytes, resolveLoopLimits } from "./agent.js"
-export type { RunAgentOptions } from "./agent.js"
+export { runAgent, runConversation, maxToolResultBytes, resolveLoopLimits } from "./agent.js"
+export type {
+  RunAgentOptions,
+  RunConversationOptions,
+  ConversationResult,
+  LoopRunOptions,
+} from "./agent.js"
 
 // Extension point 7 — the control loop itself. The kernel ships exactly one
 // (`nativeLoop`, the loop `runAgent` has always run); this is the interface
 // around it, so an application can change control flow without forking.
 export { nativeLoop, runWithEvents } from "./loop.js"
-export type { Loop, LoopRequest, LoopContext, RunContext, LoopResult } from "./loop.js"
+export type {
+  Loop,
+  LoopRequest,
+  LoopContext,
+  RunContext,
+  LoopResult,
+  TerminalCall,
+} from "./loop.js"
 
 // The run event stream. The kernel emits it; storing, resuming or replaying it
 // is the application's, because that needs persistence a kernel must not ship.
@@ -119,6 +147,7 @@ export type {
   LoopEventInput,
   LoopEventEmitter,
   RunOutcome,
+  StopReason,
   ToolReplay,
   BudgetKind,
   RunStartedEvent,
@@ -140,8 +169,13 @@ export type { PrivateRunChannels } from "./private.js"
 // Extension point 6 — tools: generic primitives, injectable domain emissions,
 // MCP connectors, rich metadata + projections, and models-as-tools
 // ---------------------------------------------------------------------------
-export { primitiveTools, connectorTools, executeTool } from "./tools/registry.js"
-export type { Tool, ToolOutput, ToolContext } from "./tools/registry.js"
+export {
+  primitiveTools,
+  connectorTools,
+  executeTool,
+  namespacedToolName,
+} from "./tools/registry.js"
+export type { Tool, ToolOutput, ToolContext, ConnectorToolName } from "./tools/registry.js"
 export {
   selectTools,
   isToolVisible,
@@ -149,6 +183,8 @@ export {
   toolsRequiringConfirmation,
   replaySafeTools,
   undoToolFor,
+  toolDispatch,
+  terminalTools,
 } from "./tools/metadata.js"
 export type {
   ToolMetadata,
@@ -156,7 +192,10 @@ export type {
   InvocationMode,
   ResultRetention,
   ClientResultVisibility,
+  ToolDispatch,
 } from "./tools/metadata.js"
+export { terminalTool } from "./tools/terminal.js"
+export type { TerminalToolOptions } from "./tools/terminal.js"
 export { modelAsTool } from "./tools/modelTool.js"
 export type { ModelToolOptions } from "./tools/modelTool.js"
 

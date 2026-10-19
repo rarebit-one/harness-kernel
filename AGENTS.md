@@ -35,8 +35,10 @@ npm run build          # tsc -p tsconfig.build.json → dist/ + .d.ts
 
 CI gates typecheck, lint, `prettier --check`, tests, and the `dist/index.d.ts`
 emit check. The offline **`mock` provider** runs the whole loop with no API keys
-and no network (`selectProvider` falls back to it when no key is set): **don't
-add tests that require a live provider key.**
+and no network: ask for it with `preferred: "mock"` (or `allowMockFallback`),
+because since 0.11 a keyless run fails loud instead of landing on it. **Don't
+add tests that require a live provider key**; `ScriptedProvider` plays a
+recorded script when a test needs tool calls.
 
 ## Invariants
 
@@ -70,7 +72,10 @@ Each has a one-line reason here; the full text is in
 - **Emit, never store.** No session store, resume or replay — that needs
   persistence. A throwing sink is logged and skipped, never fatal.
 - **Fail loud.** `AgentEngine.supports()` returns a reason and the caller fails
-  the run. The one deliberate exception is the offline `mock` fallback.
+  the run; `selectProvider` throws `ProviderCredentialsError` when no credential
+  resolves, and an adapter throws on a `providerOptions` field it cannot honour.
+  The mock is reached only by request (`preferred: "mock"`) or explicit opt-in
+  (`allowMockFallback`), never by falling back.
 - **`moduleResolution: NodeNext`.** Every relative import carries an explicit
   `.js` extension; a bare specifier will not resolve at runtime.
 - **Public API discipline.** A new export in `src/index.ts` is a compatibility

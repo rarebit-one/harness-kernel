@@ -1,4 +1,5 @@
 import type { TokenUsage } from "../models/types.js"
+import type { ProviderOptions } from "./options.js"
 
 export interface CompletionRequest {
   system: string
@@ -43,6 +44,12 @@ export interface ConverseRequest {
   system: string
   messages: AgentMessage[]
   tools: ToolSpec[]
+  /**
+   * Per-call options for the adapter: token cap, prompt caching, response
+   * format, OpenRouter routing. See `providers/options.ts`. An adapter that
+   * cannot honour an option it was given throws rather than ignoring it.
+   */
+  providerOptions?: ProviderOptions
 }
 
 export interface ConverseResult {
@@ -52,6 +59,26 @@ export interface ConverseResult {
   toolCalls: ToolCall[]
   /** Token accounting for this call, when the provider's API reports it. */
   usage?: TokenUsage
+  /**
+   * The model id the response was served by, as the API reported it. This is
+   * the *effective* model: with a fallback list it can differ from the one
+   * requested. Absent when the API did not say; `chatModel` then fills in the
+   * adapter's configured model.
+   */
+  model?: string
+  /**
+   * The provider's id for this response (an Anthropic message id, an OpenAI
+   * completion id, an OpenRouter generation id). What a billing or audit query
+   * against the provider keys on.
+   */
+  responseId?: string
+  /**
+   * The upstream that served the request behind an aggregator (OpenRouter's
+   * `provider` field: "Anthropic", "Google Vertex", …). Absent for direct
+   * adapters. This is what a data-policy audit needs, since it names who
+   * actually processed the prompt.
+   */
+  upstream?: string
 }
 
 /**
@@ -68,6 +95,13 @@ export interface ConverseOptions {
 
 export interface Provider {
   readonly name: string
+  /**
+   * The model id this adapter was configured with (the per-run model, else its
+   * env default, else its built-in default). Optional so a custom provider
+   * written before this field existed still compiles; the built-in adapters
+   * all set it, and `chatModel` reports it when a response names no model.
+   */
+  readonly model?: string
   /**
    * True when `converse` always populates `ConverseResult.usage`. `chatModel`
    * declares `caps.usage` from this, so a provider that reports nothing (the

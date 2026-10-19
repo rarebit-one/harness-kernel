@@ -22,25 +22,37 @@
 
 import { runNativeLoop } from "./agent.js"
 import { isAbortError } from "./signals.js"
-import type { LoopEventEmitter, RunEventEmitter, RunOutcome } from "./events.js"
+import type { LoopEventEmitter, RunEventEmitter, RunOutcome, StopReason } from "./events.js"
 import type { ChatModel } from "./models/chat.js"
-import type { Tool } from "./tools/registry.js"
+import type { TokenUsage } from "./models/types.js"
+import type { ProviderOptions } from "./providers/options.js"
+import type { AgentMessage } from "./providers/types.js"
+import type { Tool, ToolOutput } from "./tools/registry.js"
 
 /**
  * One run's materials, resolved.
  *
  * Everything here is already decided: the model is bound (registry-resolved and
- * middleware-wrapped if it was going to be), the prompts are built, the tool
- * surface is projected, the budgets are numbers rather than optionals. A loop
- * decides *control flow* and nothing else — which is what keeps a second
+ * middleware-wrapped if it was going to be), the conversation is seeded, the
+ * tool surface is projected, the budgets are numbers rather than optionals. A
+ * loop decides *control flow* and nothing else — which is what keeps a second
  * implementation small enough to be worth writing.
  */
 export interface LoopRequest {
   model: ChatModel
   system: string
-  userPrompt: string
+  /**
+   * The conversation so far, oldest first. A fresh run seeds one user message;
+   * a conversational application seeds its stored history plus the new user
+   * turn. It must end with a user message or the tool results the model is
+   * waiting for, since the loop's first act is to ask the model to continue it.
+   * The loop never mutates this array: it copies, then appends to the copy.
+   */
+  messages: AgentMessage[]
   tools: Tool[]
   limits: { maxSteps: number; maxDurationMs: number }
+  /** Sent on every model call this loop makes, the budget summary included. */
+  providerOptions?: ProviderOptions
 }
 
 /**
@@ -88,6 +100,18 @@ export interface RunContext {
 }
 
 /**
+ * The terminal-tool call that ended a run: the structured answer. `input` is
+ * the model's arguments (a detached copy), `output` is what the tool's
+ * executor returned when the loop ran it.
+ */
+export interface TerminalCall {
+  callId: string
+  name: string
+  input: Record<string, unknown>
+  output: ToolOutput
+}
+
+/**
  * What a loop returns.
  *
  * Richer than {@link runAgent}'s bare string on purpose: `outcome` and `steps`
@@ -96,6 +120,13 @@ export interface RunContext {
  * same two values appear on the `run.finished` event, and they must agree —
  * the event stream and the return value are two views of one run, never two
  * sources of truth.
+ *
+ * The fields after `outcome` are what a conversational caller needs and the
+ * native loop always fills: the finer `stopReason`, the full `messages` (seed
+ * plus everything appended), summed `usage`, the `terminal` call when one
+ * ended the run, and the `provider`/`model` that served it. They are optional
+ * on this seam so a custom loop that has nothing to say about them stays as
+ * small as it was; `runConversation` derives what it can when they are absent.
  */
 export interface LoopResult {
   text: string
@@ -109,6 +140,22 @@ export interface LoopResult {
    * `"timed_out"` with the prose it had accumulated.
    */
   outcome: RunOutcome
+  /** One level finer than `outcome`; see {@link StopReason}. */
+  stopReason?: StopReason
+  /** The whole conversation: the seed followed by every message appended. */
+  messages?: AgentMessage[]
+  /** Token usage summed over every model call that reported it. */
+  usage?: TokenUsage
+  /** Present when a terminal tool ended the run. */
+  terminal?: TerminalCall
+  /** The `ChatModel.id` that served the run: the adapter name for a wrapped `Provider`. */
+  provider?: string
+  /** The model id the last response named, else the adapter's configured model. */
+  model?: string
+  /** Every response id the provider reported, in call order; what a billing or audit query keys on. */
+  responseIds?: string[]
+  /** The upstream that served the last response behind an aggregator, when reported. */
+  upstream?: string
 }
 
 /**
@@ -129,9 +176,9 @@ export interface Loop {
  * The kernel's one loop: the provider-neutral tool-use loop that `runAgent` has
  * always run, behind the interface.
  *
- * This is the same code path, not a reimplementation — `runAgent` and
- * `nativeLoop` both delegate to it, so there is no second behaviour to keep in
- * sync and no way for the two to drift.
+ * This is the same code path, not a reimplementation — `runAgent`,
+ * `runConversation` and `nativeLoop` all delegate to it, so there is no second
+ * behaviour to keep in sync and no way for them to drift.
  */
 export const nativeLoop: Loop = {
   name: "native",
@@ -145,8 +192,9 @@ export const nativeLoop: Loop = {
  * forgets them produces a run that appears never to have started — and after
  * the loop became a seam, "any loop" includes ones this kernel has never seen.
  * A guarantee that depends on every future implementor remembering it is not a
- * guarantee. Both entry points — `runAgent` and `NativeEngine` — come through
- * here, so the property holds no matter whose loop runs.
+ * guarantee. Every entry point — `runAgent`, `runConversation` and
+ * `NativeEngine` — comes through here, so the property holds no matter whose
+ * loop runs.
  *
  * On a throw it closes the stream with `outcome: "failed"` and then **rethrows
  * the original error, untouched**. This changes what is observed, never what is
@@ -184,6 +232,7 @@ export async function runWithEvents(
   ctx.events.emit({
     type: "run.finished",
     outcome: result.outcome,
+    ...(result.stopReason !== undefined ? { stopReason: result.stopReason } : {}),
     steps: result.steps,
     text: result.text,
   })

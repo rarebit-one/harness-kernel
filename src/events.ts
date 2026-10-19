@@ -74,6 +74,20 @@ export interface RunEventBase {
 export type RunOutcome = "completed" | "steps_exhausted" | "timed_out" | "canceled" | "failed"
 
 /**
+ * Why the loop stopped, one level finer than {@link RunOutcome}. `end_turn` and
+ * `terminal_tool` both map to `outcome: "completed"`: the model finished of its
+ * own accord either by answering in prose or by calling a terminal tool, and a
+ * consumer that only cares whether the run finished reads `outcome`. The rest
+ * mirror their outcome. `RunOutcome` stays the coarse, wire-stable vocabulary;
+ * this is where a finer reason is added (a suspended run awaiting external
+ * tool results, say) without touching every consumer's outcome switch.
+ * `failed` is here for the same reason it is on `RunOutcome`: the native loop
+ * throws instead, but a custom loop may report it.
+ */
+export type StopReason =
+  "end_turn" | "terminal_tool" | "steps_exhausted" | "timed_out" | "canceled" | "failed"
+
+/**
  * Whether a tool's effect is safe to execute again after an interruption,
  * copied from `ToolMetadata.replay`. Absent means the tool made no claim, which
  * a resuming consumer must treat as `unsafe`.
@@ -102,6 +116,12 @@ export interface ModelTurnEvent extends RunEventBase {
   /** What the turn cost, when the model reported it (`ModelResult.usage`).
    *  Absent means "not reported", never "free". */
   usage?: Usage
+  /** The model id the response was served by, when the provider reported it. */
+  model?: string
+  /** The provider's id for the response (message / completion / generation id), when reported. */
+  responseId?: string
+  /** Behind an aggregator, the upstream that served the request (OpenRouter's response-level `provider`). */
+  upstream?: string
 }
 
 /**
@@ -219,6 +239,8 @@ export interface RunBudgetExhaustedEvent extends RunEventBase {
 export interface RunFinishedEvent extends RunEventBase {
   type: "run.finished"
   outcome: RunOutcome
+  /** The loop's finer stop reason, when it reported one (the native loop always does). */
+  stopReason?: StopReason
   steps?: number
   text?: string
   /** Present when `outcome` is `failed`, and when a loop THREW on a caller

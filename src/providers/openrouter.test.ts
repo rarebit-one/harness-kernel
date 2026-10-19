@@ -152,3 +152,91 @@ describe("openrouter converse (shared OpenAI-compatible core)", () => {
     expect(createMock.mock.calls[0]![0]).toMatchObject({ max_tokens: 2222 })
   })
 })
+
+describe("openrouter provider options", () => {
+  const conversation = [
+    { role: "user" as const, text: "first" },
+    { role: "assistant" as const, text: "", toolCalls: [{ id: "t1", name: "echo", input: {} }] },
+    { role: "tool" as const, results: [{ toolCallId: "t1", content: "r" }] },
+    { role: "user" as const, text: "last" },
+  ]
+
+  it("sends models, provider routing, usage and transforms in the body", async () => {
+    const provider = new OpenRouterProvider("or-key", "anthropic/claude-sonnet-4.5")
+    await provider.converse({
+      system: "s",
+      messages: conversation,
+      tools: [],
+      providerOptions: {
+        maxTokens: 512,
+        responseFormat: { type: "json_object" },
+        openrouter: {
+          models: ["anthropic/claude-sonnet-4.5", "openai/gpt-4.1"],
+          provider: { data_collection: "deny", zdr: true, order: ["Anthropic"] },
+          usage: { include: true },
+          transforms: ["middle-out"],
+        },
+      },
+    })
+
+    expect(createMock.mock.calls[0]![0]).toMatchObject({
+      model: "anthropic/claude-sonnet-4.5",
+      max_tokens: 512,
+      response_format: { type: "json_object" },
+      models: ["anthropic/claude-sonnet-4.5", "openai/gpt-4.1"],
+      provider: { data_collection: "deny", zdr: true, order: ["Anthropic"] },
+      usage: { include: true },
+      transforms: ["middle-out"],
+    })
+  })
+
+  it("places cache_control as content parts on the system prompt and the trailing messages", async () => {
+    const provider = new OpenRouterProvider("or-key")
+    await provider.converse({
+      system: "sys",
+      messages: conversation,
+      tools: [],
+      providerOptions: { promptCache: { trailingMessages: 2, ttl: "1h" } },
+    })
+
+    const body = createMock.mock.calls[0]![0] as { messages: unknown[] }
+    const cc = { type: "ephemeral", ttl: "1h" }
+    expect(body.messages[0]).toEqual({
+      role: "system",
+      content: [{ type: "text", text: "sys", cache_control: cc }],
+    })
+    expect(body.messages[1]).toEqual({ role: "user", content: "first" })
+    // The assistant turn with no prose has nowhere to put a breakpoint and is left alone.
+    expect(JSON.stringify(body.messages[2])).not.toContain("cache_control")
+    expect(body.messages[3]).toEqual({
+      role: "tool",
+      tool_call_id: "t1",
+      content: [{ type: "text", text: "r", cache_control: cc }],
+    })
+    expect(body.messages[4]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "last", cache_control: cc }],
+    })
+    // No prompt_cache_key: that is OpenAI's mechanism, not OpenRouter's.
+    expect(body).not.toHaveProperty("prompt_cache_key")
+  })
+
+  it("reports the served model and the upstream that served it", async () => {
+    createMock.mockResolvedValueOnce({
+      id: "gen-abc",
+      model: "anthropic/claude-sonnet-4.5",
+      provider: "Anthropic",
+      choices: [{ message: { role: "assistant", content: "ok", refusal: null } }],
+      usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+    } as never)
+    const result = await new OpenRouterProvider("or-key").converse({
+      system: "s",
+      messages: [{ role: "user", text: "hi" }],
+      tools: [],
+    })
+    expect(result.model).toBe("anthropic/claude-sonnet-4.5")
+    expect(result.upstream).toBe("Anthropic")
+    expect(result.responseId).toBe("gen-abc")
+    expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 2, totalTokens: 12 })
+  })
+})

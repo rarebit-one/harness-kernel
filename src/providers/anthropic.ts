@@ -1,6 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk"
 import type { TokenUsage } from "../models/types.js"
 import { maxTokens, providerMaxRetries, providerTimeoutMs } from "./clientOptions.js"
+import {
+  rejectOption,
+  resolveMaxRetries,
+  resolveMaxTokens,
+  resolvePromptCache,
+  type CacheTtl,
+  type ResolvedPromptCache,
+} from "./options.js"
 import type {
   AgentMessage,
   CompletionRequest,
@@ -11,31 +19,68 @@ import type {
   ToolCall,
 } from "./types.js"
 
-/** Map provider-neutral messages to Anthropic's message params (pure; tested). */
-export function toAnthropicMessages(messages: AgentMessage[]): Anthropic.MessageParam[] {
-  return messages.map((m): Anthropic.MessageParam => {
+/** The breakpoint marker placed on a block, with the requested lifetime. */
+function cacheControl(ttl: CacheTtl | undefined): Anthropic.CacheControlEphemeral {
+  return { type: "ephemeral", ...(ttl !== undefined ? { ttl } : {}) }
+}
+
+/** Where to put message breakpoints: how many trailing messages, and the lifetime. */
+export interface AnthropicMessageCache {
+  trailingMessages: number
+  ttl?: CacheTtl
+}
+
+/**
+ * Map provider-neutral messages to Anthropic's message params (pure; tested).
+ *
+ * With `cache` set, the last content block of each of the trailing N messages
+ * carries a `cache_control` breakpoint, so the whole prefix up to and including
+ * that message is served from cache on the next call. Messages outside the
+ * trailing window keep the compact string form a plain user turn had before
+ * caching existed.
+ */
+export function toAnthropicMessages(
+  messages: AgentMessage[],
+  cache?: AnthropicMessageCache,
+): Anthropic.MessageParam[] {
+  const firstCached = cache ? Math.max(0, messages.length - cache.trailingMessages) : Infinity
+  return messages.map((m, index): Anthropic.MessageParam => {
+    const mark = cache !== undefined && index >= firstCached
     if (m.role === "user") {
-      return { role: "user", content: m.text }
+      if (!mark) return { role: "user", content: m.text }
+      return {
+        role: "user",
+        content: [{ type: "text", text: m.text, cache_control: cacheControl(cache.ttl) }],
+      }
     }
     if (m.role === "assistant") {
-      const blocks: Anthropic.ContentBlockParam[] = []
+      const blocks: Array<Anthropic.TextBlockParam | Anthropic.ToolUseBlockParam> = []
       if (m.text) blocks.push({ type: "text", text: m.text })
       for (const tc of m.toolCalls) {
         blocks.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input })
       }
+      if (mark) markLast(blocks, cache.ttl)
       return { role: "assistant", content: blocks }
     }
     // Tool results are sent back as a user turn of tool_result blocks.
-    return {
-      role: "user",
-      content: m.results.map((r) => ({
-        type: "tool_result",
-        tool_use_id: r.toolCallId,
-        content: r.content,
-        is_error: r.isError ?? false,
-      })),
-    }
+    const blocks: Anthropic.ToolResultBlockParam[] = m.results.map((r) => ({
+      type: "tool_result",
+      tool_use_id: r.toolCallId,
+      content: r.content,
+      is_error: r.isError ?? false,
+    }))
+    if (mark) markLast(blocks, cache.ttl)
+    return { role: "user", content: blocks }
   })
+}
+
+/** Attach a breakpoint to the last block, when there is one to attach it to. */
+function markLast(
+  blocks: Array<{ cache_control?: Anthropic.CacheControlEphemeral | null }>,
+  ttl: CacheTtl | undefined,
+): void {
+  const last = blocks[blocks.length - 1]
+  if (last) last.cache_control = cacheControl(ttl)
 }
 
 /** Reduce an Anthropic response's content blocks to text + tool calls (pure; tested). */
@@ -88,11 +133,62 @@ export function anthropicUsage(
   }
 }
 
+/**
+ * Build the Messages API request for one conversation step (pure; tested).
+ *
+ * Prompt caching places up to four breakpoints: the system prompt (sent as one
+ * text block so it can carry one), the last tool definition, and the trailing
+ * messages. A `responseFormat` or an `openrouter` block is rejected here: the
+ * Messages API has neither, and honouring a structured answer means a terminal
+ * tool with a schema, not a request flag.
+ */
+export function anthropicRequestBody(
+  model: string,
+  req: ConverseRequest,
+  fallbackMaxTokens: number = maxTokens(),
+): Anthropic.MessageCreateParamsNonStreaming {
+  const options = req.providerOptions
+  rejectOption("anthropic", options, "responseFormat", "use a terminal tool with a schema")
+  rejectOption("anthropic", options, "openrouter")
+  const cache: ResolvedPromptCache | undefined = options?.promptCache
+    ? resolvePromptCache(options.promptCache)
+    : undefined
+
+  const tools: Anthropic.Tool[] = req.tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
+  }))
+  if (cache?.tools) {
+    const last = tools[tools.length - 1]
+    if (last) last.cache_control = cacheControl(cache.ttl)
+  }
+
+  // An empty system prompt stays a string: Anthropic rejects an empty text block.
+  const system: Anthropic.MessageCreateParams["system"] =
+    cache?.system && req.system
+      ? [{ type: "text", text: req.system, cache_control: cacheControl(cache.ttl) }]
+      : req.system
+
+  return {
+    model,
+    max_tokens: resolveMaxTokens(options, fallbackMaxTokens),
+    system,
+    tools,
+    messages: toAnthropicMessages(
+      req.messages,
+      cache && cache.trailingMessages > 0
+        ? { trailingMessages: cache.trailingMessages, ...(cache.ttl ? { ttl: cache.ttl } : {}) }
+        : undefined,
+    ),
+  }
+}
+
 export class AnthropicProvider implements Provider {
   readonly name = "anthropic"
   readonly reportsUsage = true
+  readonly model: string
   private client: Anthropic
-  private model: string
 
   constructor(apiKey: string, model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6") {
     // The SDK retries transient 429/5xx/network errors with exponential backoff
@@ -121,24 +217,20 @@ export class AnthropicProvider implements Provider {
   }
 
   async converse(req: ConverseRequest, opts?: ConverseOptions): Promise<ConverseResult> {
-    const message = await this.client.messages.create(
-      {
-        model: this.model,
-        max_tokens: maxTokens(),
-        system: req.system,
-        tools: req.tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
-        })),
-        messages: toAnthropicMessages(req.messages),
-      },
-      // Per-request, so an abort cancels THIS call (retries included) and
-      // leaves the shared client untouched.
-      opts?.signal ? { signal: opts.signal } : undefined,
-    )
+    // Per-request options, so an abort cancels THIS call (retries included)
+    // and a per-call retry count leaves the shared client untouched.
+    const retries = resolveMaxRetries(req.providerOptions)
+    const message = await this.client.messages.create(anthropicRequestBody(this.model, req), {
+      ...(opts?.signal ? { signal: opts.signal } : {}),
+      ...(retries !== undefined ? { maxRetries: retries } : {}),
+    })
 
     const usage = anthropicUsage(message.usage)
-    return { ...parseAnthropicContent(message.content), ...(usage ? { usage } : {}) }
+    return {
+      ...parseAnthropicContent(message.content),
+      ...(usage ? { usage } : {}),
+      ...(typeof message.model === "string" && message.model ? { model: message.model } : {}),
+      ...(typeof message.id === "string" && message.id ? { responseId: message.id } : {}),
+    }
   }
 }

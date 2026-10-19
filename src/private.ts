@@ -32,7 +32,7 @@
  * caller that started the run, which decides where (if anywhere) it is written.
  */
 
-import type { RunEvent, RunEventSink } from "./events.js"
+import type { RunEvent, RunEventSink, StopReason } from "./events.js"
 import type { TokenUsage, Usage } from "./models/types.js"
 
 /** What every withheld string field is replaced with. */
@@ -125,6 +125,9 @@ export function privateRunChannels(
           text: "",
           toolCalls: event.toolCalls.map((c) => ({ id: callId(c.id), name: toolName(c.name) })),
           ...(usage ? { usage } : {}),
+          // The served model id and upstream are configuration echoed back, not material.
+          ...(typeof event.model === "string" ? { model: event.model } : {}),
+          ...(typeof event.upstream === "string" ? { upstream: event.upstream } : {}),
         }
       }
       case "model.turn.failed":
@@ -179,6 +182,7 @@ export function privateRunChannels(
           ...base(event),
           type: event.type,
           outcome: oneOf(event.outcome, OUTCOMES, "failed"),
+          ...(isStopReason(event.stopReason) ? { stopReason: event.stopReason } : {}),
           ...(event.steps !== undefined ? { steps: event.steps } : {}),
           ...(event.error !== undefined ? { error: PRIVATE_REDACTION } : {}),
         }
@@ -198,6 +202,19 @@ export function privateRunChannels(
 const FAILURE_REASONS = ["threw", "unknown_tool", "aborted"] as const
 const BUDGET_KINDS = ["steps", "duration"] as const
 const OUTCOMES = ["completed", "steps_exhausted", "timed_out", "canceled", "failed"] as const
+const STOP_REASONS = [
+  "end_turn",
+  "terminal_tool",
+  "steps_exhausted",
+  "timed_out",
+  "canceled",
+  "failed",
+] as const
+
+/** A known stop reason; anything else (a custom loop's own word) is dropped. */
+function isStopReason(value: unknown): value is StopReason {
+  return typeof value === "string" && (STOP_REASONS as readonly string[]).includes(value)
+}
 
 /** `value` when it is one of `allowed`, else `fallback`. */
 function oneOf<T extends string>(value: string, allowed: readonly T[], fallback: T): T {
@@ -215,9 +232,14 @@ function redactUsage(usage: Usage | undefined): Usage | undefined {
     "totalTokens",
     "cacheReadTokens",
     "cacheWriteTokens",
+    "reasoningTokens",
   ] as const) {
     const n = usage[key]
     if (typeof n === "number") out[key] = n
+  }
+  // A cost is a number with a fixed-vocabulary currency: structural, not material.
+  if (usage.reportedCost && typeof usage.reportedCost.amount === "number") {
+    out.reportedCost = { amount: usage.reportedCost.amount, currency: "USD" }
   }
   return out
 }

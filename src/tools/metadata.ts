@@ -31,6 +31,25 @@ export type InvocationMode = "user_initiated" | "system_initiated"
 export type ResultRetention = "ephemeral" | "standard" | "persistent"
 
 /**
+ * What the loop does with a call to this tool.
+ *
+ *   - `execute`  — run it and feed the result back (the default).
+ *   - `terminal` — run it, append its result, then END the loop with the call
+ *                  as the structured answer. A final-answer tool. The other
+ *                  calls of the same assistant turn still run (in order), so
+ *                  the transcript stays whole; the first terminal call that
+ *                  succeeds is the answer.
+ *   - `external` — the loop does not run it: it returns the pending call and
+ *                  resumes when the caller supplies the result. Reserved for a
+ *                  loop that can suspend; the native loop refuses it today.
+ *
+ * This is the one piece of metadata the native loop acts on rather than merely
+ * records, because where a call ends up is control flow, and control flow is
+ * the loop's.
+ */
+export type ToolDispatch = "execute" | "terminal" | "external"
+
+/**
  * Whether a tool's raw output reaches the client. `suppressed` trims it from
  * client-facing envelopes while the model still receives it unchanged — for
  * tools whose output is the model's working data, not a user-facing payload.
@@ -46,6 +65,8 @@ export type ClientResultVisibility = "full" | "suppressed"
 export interface ToolMetadata {
   /** Human-facing label, where a UI wants something friendlier than `name`. */
   displayName?: string
+  /** What the loop does with a call to this tool. Absent means `execute`. */
+  dispatch?: ToolDispatch
   /**
    * Capability scoping. When set, only the listed capabilities see the tool;
    * absent or null means every capability does.
@@ -128,6 +149,16 @@ export function selectTools(tools: Tool[], selection: ToolSelection = {}): Tool[
  */
 export function toToolSpecs(tools: Tool[]): ToolSpec[] {
   return tools.map((tool) => tool.spec)
+}
+
+/** A tool's dispatch, with the default applied. */
+export function toolDispatch(tool: Tool): ToolDispatch {
+  return tool.meta?.dispatch ?? "execute"
+}
+
+/** Tools whose call ends the loop with a structured answer. */
+export function terminalTools(tools: Tool[]): Tool[] {
+  return tools.filter((tool) => toolDispatch(tool) === "terminal")
 }
 
 /** Tools that must not execute until a human has approved them. */

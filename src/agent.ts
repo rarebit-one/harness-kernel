@@ -1,7 +1,9 @@
 import {
   runEventEmitter,
+  type RunEvent,
   type RunEventSink,
   type RunOutcome,
+  type StopReason,
   type ToolSucceededEvent,
 } from "./events.js"
 import {
@@ -10,15 +12,18 @@ import {
   type LoopContext,
   type LoopRequest,
   type LoopResult,
+  type TerminalCall,
 } from "./loop.js"
-import { asChatModel, type ChatModel } from "./models/chat.js"
+import { asChatModel, chatRequest, type ChatModel } from "./models/chat.js"
 import { deadlineSignal, isAbortError } from "./signals.js"
-import type { InvokeContext } from "./models/types.js"
-import type { AgentMessage, Provider, ToolResult } from "./providers/types.js"
+import type { InvokeContext, TokenUsage, Usage } from "./models/types.js"
+import type { ProviderOptions } from "./providers/options.js"
+import type { AgentMessage, Provider, ToolResult, ToolSpec } from "./providers/types.js"
 import { executeTool, type Tool } from "./tools/registry.js"
-import { toToolSpecs, type ToolMetadata } from "./tools/metadata.js"
+import { toToolSpecs, toolDispatch, type ToolMetadata } from "./tools/metadata.js"
 
-export interface RunAgentOptions {
+/** What {@link runAgent} and {@link runConversation} share. */
+export interface LoopRunOptions {
   /**
    * The chat model driving the loop. A bare {@link Provider} is accepted and
    * adapted onto the model seam internally, so existing callers are unaffected;
@@ -27,8 +32,13 @@ export interface RunAgentOptions {
    */
   provider: Provider | ChatModel
   system: string
-  userPrompt: string
   tools: Tool[]
+  /**
+   * Per-call provider options — token cap, prompt caching, response format,
+   * OpenRouter routing — sent on every model call the run makes. See
+   * `providers/options.ts`.
+   */
+  providerOptions?: ProviderOptions
   maxSteps?: number
   /**
    * Wall-clock budget for the whole loop in ms. Enforced both between steps and
@@ -55,6 +65,58 @@ export interface RunAgentOptions {
   emit?: RunEventSink
 }
 
+/** A single-shot run: one user prompt in, the final prose out. */
+export interface RunAgentOptions extends LoopRunOptions {
+  userPrompt: string
+}
+
+/** A conversational run: the history so far in, the whole transcript out. */
+export interface RunConversationOptions extends LoopRunOptions {
+  /**
+   * The conversation so far, oldest first, ending with the new user message
+   * (or with the tool results the model is waiting for). The array is not
+   * mutated; the result carries a new one.
+   */
+  messages: AgentMessage[]
+}
+
+/**
+ * What {@link runConversation} returns: everything a conversational caller
+ * needs to store the turn, bill it, and answer with it.
+ */
+export interface ConversationResult {
+  /** The final assistant prose. Empty when a terminal tool answered without prose. */
+  text: string
+  /** The seed followed by every message the loop appended. Store this; seed the next turn with it. */
+  messages: AgentMessage[]
+  /**
+   * This run's full event stream, in order. The same events reached `emit` as
+   * they happened; this is a per-call recording for a caller with nowhere else
+   * to put them, not a store — nothing is kept between calls.
+   */
+  events: RunEvent[]
+  /** Token usage summed over every model call that reported it; absent if none did. */
+  usage?: TokenUsage
+  steps: number
+  outcome: RunOutcome
+  stopReason: StopReason
+  /** The terminal-tool call that ended the run, when one did. Its `input` is the structured answer. */
+  terminal?: TerminalCall
+  /** Which adapter served the run (`"anthropic"`, `"openrouter"`, `"mock"`, a custom model's id). */
+  provider: string
+  /** The model id the last response named, else the adapter's configured model. */
+  model?: string
+  /** Every response id the provider reported, in call order. */
+  responseIds: string[]
+  /**
+   * Behind an aggregator, who actually served the last response (OpenRouter's
+   * response-level `provider`, e.g. "Anthropic"). This is what a data-policy
+   * audit reads: `provider` names the adapter, `upstream` names the vendor the
+   * prompt reached. Absent for direct adapters.
+   */
+  upstream?: string
+}
+
 const DEFAULT_MAX_STEPS = 12
 const FALLBACK_MAX_DURATION_MS = 10 * 60 * 1000
 
@@ -71,7 +133,7 @@ const FALLBACK_MAX_TOOL_RESULT_BYTES = 64 * 1024
  * One place, deliberately. A {@link Loop} is handed numbers rather than
  * optionals, so if each caller resolved its own defaults a second loop
  * implementation could silently run to a different ceiling than the one the
- * kernel ships. `runAgent` and `NativeEngine` both come here.
+ * kernel ships. `runAgent`, `runConversation` and `NativeEngine` all come here.
  */
 export function resolveLoopLimits(limits?: {
   maxSteps?: number | undefined
@@ -139,6 +201,20 @@ function detach(input: Record<string, unknown>): Record<string, unknown> {
   }
 }
 
+/**
+ * The result a tool call gets when the run stopped before it could start. A
+ * stopped run must still return a transcript with every call answered: a
+ * consumer that stores `messages` and resumes the conversation sends it back
+ * to a provider, and every provider rejects a tool call with no result.
+ */
+function notRun(callId: string): ToolResult {
+  return {
+    toolCallId: callId,
+    content: "not run: the run was stopped before this tool call",
+    isError: true,
+  }
+}
+
 function truncate(text: string, max = maxToolResultBytes()): string {
   return text.length <= max
     ? text
@@ -146,33 +222,133 @@ function truncate(text: string, max = maxToolResultBytes()): string {
 }
 
 /**
+ * Add one call's usage to the running total. Only token usage is summed: a
+ * unit-billed kind (`units`) has no place in a chat loop's total, and a call
+ * that reported nothing leaves the total as it was rather than zeroing it.
+ */
+function addUsage(total: TokenUsage | undefined, next: Usage | undefined): TokenUsage | undefined {
+  if (!next || "units" in next) return total
+  const sum: TokenUsage = { ...(total ?? {}) }
+  for (const key of [
+    "inputTokens",
+    "outputTokens",
+    "totalTokens",
+    "cacheReadTokens",
+    "cacheWriteTokens",
+    "reasoningTokens",
+  ] as const) {
+    const n = next[key]
+    if (typeof n === "number") sum[key] = (sum[key] ?? 0) + n
+  }
+  // Cost is summed by amount. Every reporter bills in USD today, and the type
+  // admits nothing else, so there is no mixed-currency case to guard.
+  if (next.reportedCost) {
+    sum.reportedCost = {
+      amount: (sum.reportedCost?.amount ?? 0) + next.reportedCost.amount,
+      currency: next.reportedCost.currency,
+    }
+  }
+  return sum
+}
+
+/** The seed a loop can continue: non-empty, and not waiting on the caller. */
+function assertSeed(messages: AgentMessage[]): void {
+  const last = messages[messages.length - 1]
+  if (!last) {
+    throw new Error(
+      "conversation seed is empty: the loop needs at least one user message to answer",
+    )
+  }
+  if (last.role === "assistant") {
+    throw new Error(
+      "conversation seed ends with an assistant message, so the model has nothing to answer: " +
+        "end it with a user message, or with the tool results the model is waiting for",
+    )
+  }
+}
+
+/** The finer reason a custom loop's bare outcome implies, when it reported none. */
+function stopReasonFor(outcome: RunOutcome): StopReason {
+  return outcome === "completed" ? "end_turn" : outcome
+}
+
+/**
  * Drives a provider-agnostic tool-use loop: the model converses, the runner
  * executes any requested tools in the sandbox, feeds the results back, and
  * repeats until the model stops calling tools (or the step budget is hit). The
  * model orchestrates; deterministic work happens in the tools.
+ *
+ * This is the single-shot form: one user prompt in, the final prose out. It is
+ * {@link runConversation} with a one-message seed, kept because most callers
+ * want exactly that and nothing more.
  */
 export async function runAgent(options: RunAgentOptions): Promise<string> {
+  const { userPrompt, ...rest } = options
+  const result = await runConversation({
+    ...rest,
+    messages: [{ role: "user", text: userPrompt }],
+  })
+  return result.text
+}
+
+/**
+ * Run the tool-use loop over a conversation: the stored history plus the new
+ * user turn in, the whole transcript out, with the structured answer when a
+ * terminal tool gave one.
+ *
+ * The kernel stores nothing between calls. A conversational application keeps
+ * `result.messages` wherever it keeps its state and seeds the next call with
+ * it; what the kernel owes it is a faithful transcript, a summed bill, the
+ * reason the run stopped, and the name of what served it.
+ */
+export async function runConversation(
+  options: RunConversationOptions,
+): Promise<ConversationResult> {
   // A `Provider` is adapted onto the model seam; a `ChatModel` passes straight
   // through. Either way the loop talks to one interface, so a
   // middleware-wrapped or registry-resolved model drives it identically.
   const log = options.log ?? (() => {})
+  const model = asChatModel(options.provider)
+  // Recorded before the caller's sink sees each event, so a sink that throws
+  // (which the emitter absorbs) still leaves the recording complete.
+  const events: RunEvent[] = []
+  const sink: RunEventSink = (event) => {
+    events.push(event)
+    options.emit?.(event)
+  }
   const result = await runWithEvents(
     nativeLoop,
     {
-      model: asChatModel(options.provider),
+      model,
       system: options.system,
-      userPrompt: options.userPrompt,
+      messages: options.messages,
       tools: options.tools,
       limits: resolveLoopLimits(options),
+      ...(options.providerOptions ? { providerOptions: options.providerOptions } : {}),
     },
     {
       log,
-      events: runEventEmitter(options.emit, log),
+      events: runEventEmitter(sink, log),
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.runId !== undefined ? { runId: options.runId } : {}),
     },
   )
-  return result.text
+  return {
+    text: result.text,
+    // A custom loop that reports no transcript still must not hand the caller
+    // its own seed array back: the doc promises a new one.
+    messages: result.messages ?? [...options.messages],
+    events,
+    steps: result.steps,
+    outcome: result.outcome,
+    stopReason: result.stopReason ?? stopReasonFor(result.outcome),
+    provider: result.provider ?? model.id,
+    responseIds: result.responseIds ?? [],
+    ...(result.model !== undefined ? { model: result.model } : {}),
+    ...(result.upstream !== undefined ? { upstream: result.upstream } : {}),
+    ...(result.usage ? { usage: result.usage } : {}),
+    ...(result.terminal ? { terminal: result.terminal } : {}),
+  }
 }
 
 /**
@@ -180,13 +356,25 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
  *
  * Exported for `loop.ts` to wrap; applications reach it through `nativeLoop`
  * rather than calling this directly. It is the whole of the kernel's control
- * flow, and the only place any of it lives — `runAgent` and `nativeLoop` both
- * come here, so the two cannot drift.
+ * flow, and the only place any of it lives — `runAgent`, `runConversation` and
+ * `nativeLoop` all come here, so they cannot drift.
  */
 export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Promise<LoopResult> {
-  const { model, system, userPrompt, tools } = req
+  const { model, system, tools, providerOptions } = req
   const { maxSteps, maxDurationMs } = req.limits
   const log = loopCtx.log
+
+  // Both checks come before the first model call: a bad seed or a tool this
+  // loop cannot dispatch is a configuration error, and the cheapest failure is
+  // the one that spends no tokens.
+  assertSeed(req.messages)
+  const external = tools.filter((t) => toolDispatch(t) === "external").map((t) => t.spec.name)
+  if (external.length > 0) {
+    throw new Error(
+      `tool(s) ${external.join(", ")} declare dispatch "external", which needs a loop that can ` +
+        "suspend on a pending call and resume with its result; the native loop cannot yet",
+    )
+  }
 
   // One signal for the whole run: the caller's cancel merged with the run's own
   // deadline. It reaches every model call (through `InvokeContext.signal`, down
@@ -201,7 +389,13 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
 
   const byName = new Map(tools.map((t) => [t.spec.name, t]))
   const specs = toToolSpecs(tools)
-  const messages: AgentMessage[] = [{ role: "user", text: userPrompt }]
+  // The seed is the caller's. It is copied so the loop's appends never reach
+  // the array it was handed: a service that kept the seed for its own records
+  // must not find it grown.
+  const messages: AgentMessage[] = [...req.messages]
+  const request = (toolSpecs: ToolSpec[]) =>
+    chatRequest(system, messages, toolSpecs, undefined, providerOptions)
+  const provider = model.id
 
   const deadlineAt = Date.now() + maxDurationMs
   let finalText = ""
@@ -210,6 +404,27 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   let timedOut = false
   let stepsTaken = 0
   let step = 0
+  let usage: TokenUsage | undefined
+  let servedModel: string | undefined
+  let servedUpstream: string | undefined
+  let terminal: TerminalCall | undefined
+  const responseIds: string[] = []
+
+  /** Everything a result carries besides the three the caller decides per path. */
+  const result = (text: string, outcome: RunOutcome, stopReason: StopReason): LoopResult => ({
+    text,
+    steps: stepsTaken,
+    outcome,
+    stopReason,
+    messages,
+    provider,
+    responseIds,
+    ...(servedModel !== undefined ? { model: servedModel } : {}),
+    ...(servedUpstream !== undefined ? { upstream: servedUpstream } : {}),
+    ...(usage ? { usage } : {}),
+    // Only a run that ended BECAUSE of the terminal call reports it.
+    ...(terminal && stopReason === "terminal_tool" ? { terminal } : {}),
+  })
 
   /**
    * The run was stopped mid-flight. `signal.reason` says by whom: the deadline
@@ -226,12 +441,12 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
       )
       events.emit({ type: "run.budget_exhausted", kind: "duration", step })
       const text = `${accumulated}\n\n[run stopped: wall-clock budget of ${maxDurationMs}ms exceeded]`
-      return { text, steps: stepsTaken, outcome: "timed_out" }
+      return result(text, "timed_out", "timed_out")
     }
     const why = describeReason(signal.reason)
     log(`run canceled during step ${step}${why ? `: ${why}` : ""}`)
     const text = `${accumulated}\n\n[run stopped: canceled${why ? ` (${why})` : ""}]`
-    return { text, steps: stepsTaken, outcome: "canceled" }
+    return result(text, "canceled", "canceled")
   }
 
   try {
@@ -247,34 +462,57 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
         break
       }
       signal.throwIfAborted()
-      const turnResult = await model.invoke({ system, messages, tools: specs }, ctx)
+      const turnResult = await model.invoke(request(specs), ctx)
       const turn = turnResult.value
       stepsTaken = step + 1
-      messages.push({ role: "assistant", text: turn.text, toolCalls: turn.toolCalls })
+      // The transcript keeps a detached copy of each call: a tool is handed its
+      // own copy below, so an executor that mutates its input can rewrite
+      // neither what the model said nor what is replayed on the next request.
+      const calls = turn.toolCalls.map((c) => ({ ...c, input: detach(c.input) }))
+      messages.push({ role: "assistant", text: turn.text, toolCalls: calls })
       if (turn.text) lastAssistantText = turn.text
+      usage = addUsage(usage, turnResult.usage)
+      // Both describe the LAST response, so a response that names neither
+      // clears an earlier value rather than letting it stand in an audit.
+      servedModel = turn.model
+      servedUpstream = turn.upstream
+      if (turn.responseId) responseIds.push(turn.responseId)
       events.emit({
         type: "model.turn",
         step,
         text: turn.text,
         toolCalls: turn.toolCalls.map((c) => ({ id: c.id, name: c.name })),
         ...(turnResult.usage ? { usage: turnResult.usage } : {}),
+        ...(turn.model ? { model: turn.model } : {}),
+        ...(turn.responseId ? { responseId: turn.responseId } : {}),
+        ...(turn.upstream ? { upstream: turn.upstream } : {}),
       })
       // A model that ignored its signal can still answer after the stop. The
       // turn happened, so it is recorded above and its prose is kept, but the
       // outcome is the stop's — `canceled` or `timed_out`, never `completed` —
-      // and none of the tools it asked for run.
-      if (signal.aborted) return stopped()
+      // and none of the tools it asked for run. Each call it asked for still
+      // gets a result, so the transcript it leaves behind can be resumed.
+      if (signal.aborted) {
+        if (calls.length > 0) {
+          messages.push({ role: "tool", results: calls.map((c) => notRun(c.id)) })
+        }
+        return stopped()
+      }
 
-      if (turn.toolCalls.length === 0) {
+      if (calls.length === 0) {
         finalText = turn.text
         break
       }
 
       const results: ToolResult[] = []
-      for (const call of turn.toolCalls) {
+      for (const call of calls) {
         // Never START a tool once the run is stopping: a side effect begun
-        // after a cancel is the one thing a cancel must prevent.
-        signal.throwIfAborted()
+        // after a cancel is the one thing a cancel must prevent. The call is
+        // answered as not run rather than skipped, so the turn still closes.
+        if (signal.aborted) {
+          results.push(notRun(call.id))
+          continue
+        }
         const tool = byName.get(call.name)
         if (!tool) {
           results.push({
@@ -308,7 +546,8 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
           // Uses the tool's structured executor when it has one, so a typed
           // payload survives alongside the string the model sees. Tools without
           // one take the original string path unchanged.
-          const output = await executeTool(tool, call.input, {
+          // The tool gets its own copy; `call.input` stays the model's words.
+          const output = await executeTool(tool, detach(call.input), {
             signal,
             callId: call.id,
             ...(loopCtx.runId !== undefined ? { runId: loopCtx.runId } : {}),
@@ -330,6 +569,13 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
             bytes: Buffer.byteLength(output.content, "utf8"),
             ...undoFields(tool.meta),
           })
+          // A terminal tool that returned is the run's answer. Its executor
+          // ran like any other (a throw above is an ordinary tool error the
+          // model gets to correct), and the rest of this turn's calls still
+          // get their results so the transcript stays whole.
+          if (!terminal && toolDispatch(tool) === "terminal") {
+            terminal = { callId: call.id, name: call.name, input: call.input, output }
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           results.push({ toolCallId: call.id, content: message, isError: true })
@@ -350,6 +596,20 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
       }
       messages.push({ role: "tool", results })
 
+      // A tool that ignored its signal can still return after the stop. Its
+      // result is kept (the transcript stays whole), but the outcome is the
+      // stop's — a terminal call that landed after a cancel is not an answer
+      // the caller asked for, so it is not reported as one.
+      if (signal.aborted) return stopped()
+
+      // Checked before the step budget, so an answer given on the last allowed
+      // step is still `completed` rather than `steps_exhausted`.
+      if (terminal) {
+        log(`terminal tool ${terminal.name} answered; ending the run`)
+        finalText = turn.text
+        break
+      }
+
       if (step === maxSteps - 1) {
         exhausted = true
         events.emit({ type: "run.budget_exhausted", kind: "steps", step })
@@ -364,12 +624,17 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
     throw err
   }
 
+  // A terminal tool answered: the prose is whatever the turn said (often
+  // nothing), and the structured answer rides on `terminal`. No placeholder
+  // text — an empty string is the honest value here.
+  if (terminal) return result(finalText, "completed", "terminal_tool")
+
   // Ran out of time mid-loop: don't spend more of the (already-blown) budget on
   // a summary call — just return whatever prose we accumulated, clearly noted.
   if (!finalText && timedOut) {
     const accumulated = lastAssistantText || "(no output before time budget exhausted)"
     const text = `${accumulated}\n\n[run stopped: wall-clock budget of ${maxDurationMs}ms exceeded]`
-    return { text, steps: stepsTaken, outcome: "timed_out" }
+    return result(text, "timed_out", "timed_out")
   }
 
   // Hit the step budget mid-tool-use: ask once more with no tools so the model
@@ -380,8 +645,12 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
     // asked it to stop, or its time is already gone.
     if (signal.aborted) return stopped()
     try {
-      const summaryResult = await model.invoke({ system, messages, tools: [] }, ctx)
+      const summaryResult = await model.invoke(request([]), ctx)
       const summary = summaryResult.value
+      usage = addUsage(usage, summaryResult.usage)
+      servedModel = summary.model
+      servedUpstream = summary.upstream
+      if (summary.responseId) responseIds.push(summary.responseId)
       // Emitted like any other turn: `run.finished.text` can come from this
       // call, and a terminal event whose text traces back to no turn in the
       // transcript would break the stream's one promise.
@@ -391,7 +660,13 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
         text: summary.text,
         toolCalls: [],
         ...(summaryResult.usage ? { usage: summaryResult.usage } : {}),
+        ...(summary.model ? { model: summary.model } : {}),
+        ...(summary.responseId ? { responseId: summary.responseId } : {}),
+        ...(summary.upstream ? { upstream: summary.upstream } : {}),
       })
+      // The summary is part of the conversation too: a caller that stores
+      // `messages` and resumes later should see what the model last said.
+      messages.push({ role: "assistant", text: summary.text, toolCalls: [] })
       finalText = summary.text || lastAssistantText
       // Same rule as a turn: a summary that arrives after the stop is kept,
       // but the run still ends with the stop's outcome.
@@ -419,8 +694,9 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   // `steps_exhausted`, because the distinction is exactly what a consumer needs
   // to know about the trustworthiness of the answer.
   const outcome: RunOutcome = timedOut ? "timed_out" : exhausted ? "steps_exhausted" : "completed"
+  const stopReason: StopReason = timedOut ? "timed_out" : exhausted ? "steps_exhausted" : "end_turn"
   // `runWithEvents` builds the terminal event from exactly this result, so the
   // return value and the stream cannot disagree — there is one source now, not
   // two that happen to be written from the same variables.
-  return { text, steps: stepsTaken, outcome }
+  return result(text, outcome, stopReason)
 }

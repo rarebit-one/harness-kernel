@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest"
-import { selectProvider } from "./index.js"
+import { ProviderCredentialsError, providerAvailability, selectProvider } from "./index.js"
 
 describe("selectProvider", () => {
   const saved = {
@@ -28,10 +28,51 @@ describe("selectProvider", () => {
     restore("LOCAL_MODEL_API_KEY", saved.lk)
   })
 
-  it("degrades to the offline mock when no key is configured", () => {
+  it("FAILS LOUD when the preferred provider has no key — no more silent mock", () => {
     clearKeys()
-    expect(selectProvider("anthropic").name).toBe("mock")
-    expect(selectProvider("openrouter").name).toBe("mock")
+    // Production ran like this for weeks: a payload naming anthropic, a host
+    // with no key, and a run that completed on the mock while reporting
+    // success. The consumer grew prediction code to tell the two apart.
+    expect(() => selectProvider("anthropic")).toThrow(ProviderCredentialsError)
+    expect(() => selectProvider("openrouter")).toThrow(/OPENROUTER_API_KEY/)
+    try {
+      selectProvider("anthropic")
+    } catch (err) {
+      const e = err as ProviderCredentialsError
+      expect(e.preferred).toBe("anthropic")
+      expect(e.missing).toEqual(["ANTHROPIC_API_KEY", "credentials.anthropic"])
+      expect(e.message).toMatch(/credentials\.anthropic/)
+    }
+  })
+
+  it("fails loud when nothing is configured and no preference is given", () => {
+    clearKeys()
+    expect(() => selectProvider(null)).toThrow(ProviderCredentialsError)
+    expect(() => selectProvider(undefined)).toThrow(
+      /ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY/,
+    )
+  })
+
+  it("degrades to the mock only on an explicit allowMockFallback", () => {
+    clearKeys()
+    expect(selectProvider("anthropic", { allowMockFallback: true }).name).toBe("mock")
+    expect(selectProvider(null, { allowMockFallback: true }).name).toBe("mock")
+    // The opt-in never overrides a configured key.
+    process.env.OPENAI_API_KEY = "sk-env"
+    expect(selectProvider("openai", { allowMockFallback: true }).name).toBe("openai")
+  })
+
+  it("reports availability as a reason, mirroring what selectProvider would do", () => {
+    clearKeys()
+    expect(providerAvailability("anthropic")).toMatchObject({ ok: false })
+    expect(providerAvailability("anthropic", { allowMockFallback: true })).toEqual({ ok: true })
+    expect(providerAvailability("mock")).toEqual({ ok: true })
+    expect(providerAvailability(null)).toMatchObject({ ok: false })
+    const refused = providerAvailability("openrouter")
+    expect(!refused.ok && refused.reason).toMatch(/OPENROUTER_API_KEY/)
+    process.env.ANTHROPIC_API_KEY = "sk-env"
+    expect(providerAvailability("anthropic")).toEqual({ ok: true })
+    expect(providerAvailability(null)).toEqual({ ok: true })
   })
 
   it("uses a per-org BYO key even when no env key is set", () => {
@@ -66,10 +107,39 @@ describe("selectProvider", () => {
     expect(selectProvider(null).name).toBe("openrouter")
   })
 
-  it("falls through to a configured provider when the preferred one has no key", () => {
+  it("does NOT fall through to another configured provider when the preferred one has no key", () => {
     clearKeys()
     process.env.ANTHROPIC_API_KEY = "sk-env"
-    expect(selectProvider("openrouter").name).toBe("anthropic")
+    // A run that asked for one model and quietly got another is the same
+    // failure as one that quietly got the mock.
+    expect(() => selectProvider("openrouter")).toThrow(ProviderCredentialsError)
+    // No preference still picks whatever is configured.
+    expect(selectProvider(null).name).toBe("anthropic")
+  })
+
+  it("refuses a provider name it does not know, whatever keys or opt-ins are present", () => {
+    clearKeys()
+    process.env.ANTHROPIC_API_KEY = "sk-env"
+    // A typo must not route to whichever key is configured.
+    expect(() => selectProvider("openia")).toThrow(ProviderCredentialsError)
+    expect(() => selectProvider("openia")).toThrow(/not one this kernel knows/)
+    expect(() => selectProvider("gemini", { allowMockFallback: true })).toThrow(
+      ProviderCredentialsError,
+    )
+    expect(providerAvailability("openia").ok).toBe(false)
+    // Absent, null and blank still mean "no preference".
+    expect(selectProvider("").name).toBe("anthropic")
+    expect(selectProvider("  ").name).toBe("anthropic")
+    expect(selectProvider(null).name).toBe("anthropic")
+  })
+
+  it("exposes the configured model on every built-in adapter", () => {
+    clearKeys()
+    expect(
+      selectProvider("anthropic", { model: "m-a", credentials: { anthropic: "k" } }).model,
+    ).toBe("m-a")
+    expect(selectProvider("mock", { model: "m-m" }).model).toBe("m-m")
+    expect(selectProvider("mock").model).toBeUndefined()
   })
 
   it("honours an explicit preferred=mock even when a key is configured", () => {

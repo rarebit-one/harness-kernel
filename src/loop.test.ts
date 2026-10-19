@@ -49,7 +49,7 @@ function request(provider: Provider, overrides: Partial<LoopRequest> = {}): Loop
   return {
     model: asChatModel(provider),
     system: "s",
-    userPrompt: "go",
+    messages: [{ role: "user", text: "go" }],
     tools: [actTool],
     limits: resolveLoopLimits(),
     ...overrides,
@@ -68,7 +68,7 @@ function spec(overrides: Partial<RunSpec> = {}): RunSpec {
     permissions: {},
     secrets: {},
     connectors: [],
-    provider: {},
+    provider: { preferred: "mock" },
     ...overrides,
   }
 }
@@ -80,7 +80,12 @@ describe("nativeLoop", () => {
       events: runEventEmitter(),
     })
 
-    expect(result).toEqual({ text: "done", steps: 2, outcome: "completed" })
+    expect(result).toMatchObject({ text: "done", steps: 2, outcome: "completed" })
+    // Since 0.11 the native loop also says why it stopped, what it said, and
+    // what served it — the facts a conversational caller needs.
+    expect(result.stopReason).toBe("end_turn")
+    expect(result.provider).toBe("scripted")
+    expect(result.messages?.map((m) => m.role)).toEqual(["user", "assistant", "tool", "assistant"])
     expect(nativeLoop.name).toBe("native")
   })
 
@@ -239,6 +244,30 @@ describe("NativeEngine loop seam", () => {
       log: () => {},
     })
     expect(typeof result.text).toBe("string")
+    // Observed from the run, not predicted from the payload.
+    expect(result.provider).toBe("mock")
+  })
+
+  it("hands the loop the run's providerOptions and reports the model it was configured with", async () => {
+    const seen: LoopRequest[] = []
+    const stub: Loop = {
+      name: "stub",
+      run: async (req) => {
+        seen.push(req)
+        return { text: "", steps: 0, outcome: "completed" }
+      },
+    }
+    const result = await new NativeEngine({ loop: stub }).run(
+      spec({
+        provider: { preferred: "mock", model: "m-pinned" },
+        providerOptions: { promptCache: {}, maxTokens: 99 },
+      }),
+      { log: () => {} },
+    )
+    expect(seen[0]?.providerOptions).toEqual({ promptCache: {}, maxTokens: 99 })
+    expect(seen[0]?.messages.map((m) => m.role)).toEqual(["user"])
+    // A loop that reports nothing falls back to the selected adapter's model.
+    expect(result).toMatchObject({ provider: "mock", model: "m-pinned" })
   })
 
   it("drives the injected loop instead of the native one", async () => {
