@@ -8,6 +8,7 @@ import {
   resolvePromptCache,
   type CacheTtl,
   type ResolvedPromptCache,
+  type ToolChoice,
 } from "./options.js"
 import type {
   AgentMessage,
@@ -15,6 +16,7 @@ import type {
   ConverseOptions,
   ConverseRequest,
   ConverseResult,
+  FinishReason,
   Provider,
   ToolCall,
 } from "./types.js"
@@ -101,6 +103,35 @@ export function parseAnthropicContent(content: Anthropic.ContentBlock[]): Conver
   return { text, toolCalls }
 }
 
+/** Map Anthropic's `stop_reason` onto the neutral vocabulary (pure; tested). */
+export function anthropicFinishReason(
+  stopReason: Anthropic.StopReason | null | undefined,
+): FinishReason {
+  switch (stopReason) {
+    case "end_turn":
+    case "stop_sequence":
+    case "pause_turn":
+      return "stop"
+    case "tool_use":
+      return "tool_calls"
+    case "max_tokens":
+    case "model_context_window_exceeded":
+      return "length"
+    case "refusal":
+      return "content_filter"
+    default:
+      return "unknown"
+  }
+}
+
+/** Anthropic's `tool_choice` for a neutral {@link ToolChoice}. */
+function anthropicToolChoice(choice: ToolChoice): Anthropic.ToolChoice {
+  if (choice === "auto") return { type: "auto" }
+  if (choice === "required") return { type: "any" }
+  if (choice === "none") return { type: "none" }
+  return { type: "tool", name: choice.name }
+}
+
 /**
  * Map an Anthropic `usage` block to the kernel's token accounting (pure; tested).
  *
@@ -173,6 +204,12 @@ export function anthropicRequestBody(
   return {
     model,
     max_tokens: resolveMaxTokens(options, fallbackMaxTokens),
+    ...(typeof options?.temperature === "number" ? { temperature: options.temperature } : {}),
+    // Omitted on a tools-free request: the budget summary call sends the same
+    // options with no tools, and a forced choice there is an API error.
+    ...(options?.toolChoice !== undefined && tools.length > 0
+      ? { tool_choice: anthropicToolChoice(options.toolChoice) }
+      : {}),
     system,
     tools,
     messages: toAnthropicMessages(
@@ -229,6 +266,7 @@ export class AnthropicProvider implements Provider {
     return {
       ...parseAnthropicContent(message.content),
       ...(usage ? { usage } : {}),
+      finishReason: anthropicFinishReason(message.stop_reason),
       ...(typeof message.model === "string" && message.model ? { model: message.model } : {}),
       ...(typeof message.id === "string" && message.id ? { responseId: message.id } : {}),
     }

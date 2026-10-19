@@ -434,3 +434,47 @@ describe("privateRunChannels: 0.11 fields", () => {
     expect(events[0]).not.toHaveProperty("stopReason")
   })
 })
+
+describe("privateRunChannels: 0.11.0-next.1 fields", () => {
+  it("keeps finishReason, stopReason length and the truncated failure reason", () => {
+    const { sink, events } = recordRunEvents()
+    const channels = privateRunChannels(() => {}, sink)
+    channels.emit({
+      seq: 0,
+      at: 1,
+      type: "run.started",
+      maxSteps: 1,
+      maxDurationMs: 1,
+      tools: ["t"],
+    })
+    channels.emit({
+      seq: 1,
+      at: 2,
+      type: "model.turn",
+      step: 0,
+      text: "x",
+      toolCalls: [],
+      finishReason: "length",
+    })
+    channels.emit({
+      seq: 2,
+      at: 3,
+      type: "tool.failed",
+      step: 0,
+      callId: "c",
+      name: "t",
+      reason: "truncated",
+      error: "cut",
+    })
+    channels.emit({
+      seq: 3,
+      at: 4,
+      type: "run.finished",
+      outcome: "completed",
+      stopReason: "length",
+    })
+    expect(events[1]).toMatchObject({ finishReason: "length" })
+    expect(events[2]).toMatchObject({ reason: "truncated", error: PRIVATE_REDACTION })
+    expect(events[3]).toMatchObject({ stopReason: "length" })
+  })
+})

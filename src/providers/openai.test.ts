@@ -3,6 +3,7 @@ import {
   OpenAICompatibleProvider,
   OpenAIProvider,
   openAICompatibleRequestBody,
+  openAIFinishReason,
   openAIUsage,
   toOpenAIMessages,
   parseOpenAIMessage,
@@ -73,7 +74,9 @@ describe("openai message mapping", () => {
     } as never)
 
     expect(result.text).toBe("hello")
-    expect(result.toolCalls).toEqual([{ id: "x", name: "run_code", input: { command: "ls" } }])
+    expect(result.toolCalls).toEqual([
+      { id: "x", name: "run_code", input: { command: "ls" }, argumentsText: '{"command":"ls"}' },
+    ])
   })
 
   it("treats null content as empty text", () => {
@@ -92,9 +95,11 @@ describe("openai message mapping", () => {
       ],
     } as never)
 
+    // The parse is tolerant, but the raw text survives beside it: that is the
+    // one signal that tells a cut-off call from an empty one.
     expect(result.toolCalls).toEqual([
-      { id: "a", name: "noop", input: {} },
-      { id: "b", name: "bad", input: {} },
+      { id: "a", name: "noop", input: {}, argumentsText: "" },
+      { id: "b", name: "bad", input: {}, argumentsText: "{not json" },
     ])
   })
 })
@@ -232,5 +237,84 @@ describe("openai provider options", () => {
     expect(result.upstream).toBeUndefined()
     expect(provider.model).toBe("gpt-requested")
     expect(new OpenAICompatibleProvider("custom", { apiKey: "k", model: "m" }).model).toBe("m")
+  })
+})
+
+describe("openai finish reason, raw arguments, temperature and tool choice (0.11.0-next.1)", () => {
+  const tools = [{ name: "a", description: "a", inputSchema: { type: "object" } }]
+  const request = (overrides: Partial<ConverseRequest> = {}): ConverseRequest => ({
+    system: "sys",
+    messages: [{ role: "user", text: "hi" }],
+    tools,
+    ...overrides,
+  })
+
+  it("maps every finish_reason onto the neutral vocabulary", () => {
+    expect(openAIFinishReason("stop")).toBe("stop")
+    expect(openAIFinishReason("tool_calls")).toBe("tool_calls")
+    expect(openAIFinishReason("function_call")).toBe("tool_calls")
+    expect(openAIFinishReason("length")).toBe("length")
+    expect(openAIFinishReason("content_filter")).toBe("content_filter")
+    expect(openAIFinishReason(null)).toBe("unknown")
+    expect(openAIFinishReason(undefined)).toBe("unknown")
+  })
+
+  it("reports the choice's finish reason on every converse, unknown when absent", async () => {
+    createMock.mockResolvedValueOnce({
+      choices: [
+        { finish_reason: "length", message: { role: "assistant", content: "cu", refusal: null } },
+      ],
+    } as never)
+    expect((await new OpenAIProvider("k").converse(request())).finishReason).toBe("length")
+    createMock.mockResolvedValueOnce({ choices: [] })
+    expect((await new OpenAIProvider("k").converse(request())).finishReason).toBe("unknown")
+  })
+
+  it("replays a call's raw arguments verbatim, even when they do not parse", () => {
+    const mapped = toOpenAIMessages([
+      {
+        role: "assistant",
+        text: "",
+        toolCalls: [
+          { id: "t1", name: "x", input: {}, argumentsText: '{"a": 1, "b": [1,' },
+          { id: "t2", name: "y", input: { ok: true } },
+        ],
+      },
+    ])
+    const calls = (mapped[0] as { tool_calls: Array<{ function: { arguments: string } }> })
+      .tool_calls
+    expect(calls[0]?.function.arguments).toBe('{"a": 1, "b": [1,')
+    expect(calls[1]?.function.arguments).toBe('{"ok":true}')
+  })
+
+  it("sends temperature and maps each tool_choice form", () => {
+    const body = (toolChoice: unknown, t?: number) =>
+      openAICompatibleRequestBody(
+        "openai",
+        "gpt",
+        request({
+          providerOptions: {
+            toolChoice: toolChoice as never,
+            ...(t !== undefined ? { temperature: t } : {}),
+          },
+        }),
+        100,
+      )
+    expect(body("auto", 0.5)).toMatchObject({ temperature: 0.5, tool_choice: "auto" })
+    expect(body("required").tool_choice).toBe("required")
+    expect(body("none").tool_choice).toBe("none")
+    expect(body({ name: "a" }).tool_choice).toEqual({ type: "function", function: { name: "a" } })
+  })
+
+  it("omits tool_choice on a tools-free request, on every dialect", () => {
+    for (const name of ["openai", "openrouter", "local"]) {
+      const body = openAICompatibleRequestBody(
+        name,
+        "m",
+        request({ tools: [], providerOptions: { toolChoice: { name: "a" } } }),
+        100,
+      )
+      expect(body).not.toHaveProperty("tool_choice")
+    }
   })
 })

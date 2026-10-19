@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
 import {
   AnthropicProvider,
+  anthropicFinishReason,
   anthropicRequestBody,
   toAnthropicMessages,
   parseAnthropicContent,
@@ -211,5 +212,65 @@ describe("anthropic provider options", () => {
     expect(result.responseId).toBe("msg_01")
     expect((createMock.mock.calls[0] as unknown[])[1]).toEqual({ maxRetries: 0 })
     expect(new AnthropicProvider("k", "claude-requested").model).toBe("claude-requested")
+  })
+})
+
+describe("anthropic finish reason, temperature and tool choice (0.11.0-next.1)", () => {
+  const tools = [{ name: "a", description: "a", inputSchema: { type: "object" } }]
+  const request = (overrides: Partial<ConverseRequest> = {}): ConverseRequest => ({
+    system: "sys",
+    messages: [{ role: "user", text: "hi" }],
+    tools,
+    ...overrides,
+  })
+
+  it("maps every stop_reason onto the neutral vocabulary", () => {
+    expect(anthropicFinishReason("end_turn")).toBe("stop")
+    expect(anthropicFinishReason("stop_sequence")).toBe("stop")
+    expect(anthropicFinishReason("pause_turn")).toBe("stop")
+    expect(anthropicFinishReason("tool_use")).toBe("tool_calls")
+    expect(anthropicFinishReason("max_tokens")).toBe("length")
+    expect(anthropicFinishReason("model_context_window_exceeded")).toBe("length")
+    expect(anthropicFinishReason("refusal")).toBe("content_filter")
+    expect(anthropicFinishReason(null)).toBe("unknown")
+    expect(anthropicFinishReason(undefined)).toBe("unknown")
+  })
+
+  it("reports the response's finish reason on every converse", async () => {
+    createMock.mockResolvedValueOnce({
+      content: [{ type: "text", text: "cut", citations: [] }],
+      stop_reason: "max_tokens",
+      usage: { input_tokens: 1, output_tokens: 1 },
+    } as never)
+    const result = await new AnthropicProvider("k").converse(request())
+    expect(result.finishReason).toBe("length")
+  })
+
+  it("sends temperature and maps each tool_choice form", () => {
+    const body = (toolChoice: unknown, t?: number) =>
+      anthropicRequestBody(
+        "m",
+        request({
+          providerOptions: {
+            toolChoice: toolChoice as never,
+            ...(t !== undefined ? { temperature: t } : {}),
+          },
+        }),
+        100,
+      )
+    expect(body("auto", 0.2)).toMatchObject({ temperature: 0.2, tool_choice: { type: "auto" } })
+    expect(body("required").tool_choice).toEqual({ type: "any" })
+    expect(body("none").tool_choice).toEqual({ type: "none" })
+    expect(body({ name: "a" }).tool_choice).toEqual({ type: "tool", name: "a" })
+    expect(anthropicRequestBody("m", request(), 100)).not.toHaveProperty("temperature")
+  })
+
+  it("omits tool_choice on a tools-free request, which is what the summary call sends", () => {
+    const body = anthropicRequestBody(
+      "m",
+      request({ tools: [], providerOptions: { toolChoice: { name: "a" } } }),
+      100,
+    )
+    expect(body).not.toHaveProperty("tool_choice")
   })
 })

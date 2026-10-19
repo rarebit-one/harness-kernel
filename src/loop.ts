@@ -26,7 +26,7 @@ import type { LoopEventEmitter, RunEventEmitter, RunOutcome, StopReason } from "
 import type { ChatModel } from "./models/chat.js"
 import type { TokenUsage } from "./models/types.js"
 import type { ProviderOptions } from "./providers/options.js"
-import type { AgentMessage } from "./providers/types.js"
+import type { AgentMessage, FinishReason } from "./providers/types.js"
 import type { Tool, ToolOutput } from "./tools/registry.js"
 
 /**
@@ -156,6 +156,8 @@ export interface LoopResult {
   responseIds?: string[]
   /** The upstream that served the last response behind an aggregator, when reported. */
   upstream?: string
+  /** Why the last model call stopped generating, when the provider reported it. */
+  finishReason?: FinishReason
 }
 
 /**

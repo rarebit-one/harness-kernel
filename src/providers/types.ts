@@ -17,8 +17,33 @@ export interface ToolSpec {
 export interface ToolCall {
   id: string
   name: string
+  /** The parsed arguments. Invalid or empty JSON parses to `{}`; see `argumentsText`. */
   input: Record<string, unknown>
+  /**
+   * The exact argument bytes the model emitted, when the dialect delivers them
+   * as text (the OpenAI dialect does; Anthropic hands over an object and
+   * leaves this absent). Preserved when the call is placed back into history,
+   * so a resumed conversation carries what the model produced rather than a
+   * re-serialisation of the parse. Present but unparseable means the call was
+   * cut off; the loop refuses such a call rather than run it with `{}`.
+   */
+  argumentsText?: string
+  /**
+   * Opaque per-call provider data that must round-trip through history (a
+   * thought signature, say). The kernel carries it and never reads it; an
+   * adapter that needs it reads it back when serialising the call.
+   */
+  meta?: Record<string, unknown>
 }
+
+/**
+ * Why the model stopped generating, normalised across dialects. `length`
+ * means the output token cap cut the turn, so prose may be incomplete and a
+ * tool call may be missing its tail; `content_filter` means the provider
+ * refused; `unknown` means the provider reported nothing. A provider that
+ * cannot report one sets `unknown`; absent is never "finished cleanly".
+ */
+export type FinishReason = "stop" | "tool_calls" | "length" | "content_filter" | "unknown"
 
 /** The reply to a ToolCall. */
 export interface ToolResult {
@@ -59,6 +84,8 @@ export interface ConverseResult {
   toolCalls: ToolCall[]
   /** Token accounting for this call, when the provider's API reports it. */
   usage?: TokenUsage
+  /** Why generation stopped. The built-in adapters always set it. */
+  finishReason?: FinishReason
   /**
    * The model id the response was served by, as the API reported it. This is
    * the *effective* model: with a fallback list it can differ from the one

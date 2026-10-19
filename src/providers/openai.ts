@@ -8,6 +8,7 @@ import {
   resolvePromptCache,
   type CacheTtl,
   type ResolvedPromptCache,
+  type ToolChoice,
 } from "./options.js"
 import type {
   AgentMessage,
@@ -15,6 +16,7 @@ import type {
   ConverseOptions,
   ConverseRequest,
   ConverseResult,
+  FinishReason,
   Provider,
   ToolCall,
 } from "./types.js"
@@ -67,7 +69,9 @@ export function toOpenAIMessages(
         msg.tool_calls = m.toolCalls.map((tc) => ({
           id: tc.id,
           type: "function",
-          function: { name: tc.name, arguments: JSON.stringify(tc.input) },
+          // The model's own bytes when we have them, so a replayed call is
+          // verbatim; the parsed object re-serialised otherwise.
+          function: { name: tc.name, arguments: tc.argumentsText ?? JSON.stringify(tc.input) },
         }))
       }
       out.push(msg)
@@ -101,9 +105,35 @@ export function parseOpenAIMessage(
       id: tc.id,
       name: tc.function.name,
       input: parseArguments(tc.function.arguments),
+      argumentsText: tc.function.arguments,
     })
   }
   return { text, toolCalls }
+}
+
+/** Map the OpenAI dialect's `finish_reason` onto the neutral vocabulary (pure; tested). */
+export function openAIFinishReason(finishReason: string | null | undefined): FinishReason {
+  switch (finishReason) {
+    case "stop":
+      return "stop"
+    case "tool_calls":
+    case "function_call":
+      return "tool_calls"
+    case "length":
+      return "length"
+    case "content_filter":
+      return "content_filter"
+    default:
+      return "unknown"
+  }
+}
+
+/** The dialect's `tool_choice` for a neutral {@link ToolChoice}. */
+function openAIToolChoice(
+  choice: ToolChoice,
+): OpenAI.Chat.Completions.ChatCompletionToolChoiceOption {
+  if (typeof choice === "string") return choice
+  return { type: "function", function: { name: choice.name } }
 }
 
 /**
@@ -238,6 +268,12 @@ export function openAICompatibleRequestBody(
     ...(name === OPENAI_ADAPTER ? { max_completion_tokens: cap } : { max_tokens: cap }),
     messages: [system, ...toOpenAIMessages(req.messages, messageCache)],
     ...(tools.length > 0 ? { tools } : {}),
+    // Omitted on a tools-free request: the budget summary call sends the same
+    // options with no tools, and a forced choice there is an API error.
+    ...(tools.length > 0 && options?.toolChoice !== undefined
+      ? { tool_choice: openAIToolChoice(options.toolChoice) }
+      : {}),
+    ...(typeof options?.temperature === "number" ? { temperature: options.temperature } : {}),
     ...(options?.responseFormat ? { response_format: options.responseFormat } : {}),
   }
   if (name === OPENAI_ADAPTER && cache?.key) body.prompt_cache_key = cache.key
@@ -306,8 +342,10 @@ export class OpenAICompatibleProvider implements Provider {
     )
 
     const usage = openAIUsage(completion.usage)
-    const message = completion.choices[0]?.message
+    const choice = completion.choices[0]
+    const message = choice?.message
     const parsed = message ? parseOpenAIMessage(message) : { text: "", toolCalls: [] }
+    const finishReason = openAIFinishReason(choice?.finish_reason)
     // OpenRouter adds a top-level `provider` naming the upstream that served
     // the request; the SDK's response type does not know it, so read it loosely.
     const upstream =
@@ -315,6 +353,7 @@ export class OpenAICompatibleProvider implements Provider {
     return {
       ...parsed,
       ...(usage ? { usage } : {}),
+      finishReason,
       ...(typeof completion.model === "string" && completion.model
         ? { model: completion.model }
         : {}),

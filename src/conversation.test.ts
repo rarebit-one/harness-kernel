@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { runAgent, runConversation } from "./agent.js"
+import { TruncatedAnswerError, isTruncatedCall, runAgent, runConversation } from "./agent.js"
 import { recordRunEvents } from "./events.js"
 import { ScriptedProvider } from "./providers/scripted.js"
 import type { AgentMessage, ConverseResult, Provider } from "./providers/types.js"
@@ -577,5 +577,299 @@ describe("runAgent", () => {
       tools: [echo],
     })
     expect(viaAgent).toBe(viaConversation.text)
+  })
+})
+
+describe("finish reasons and the length rule (0.11.0-next.1)", () => {
+  const lengthTurn = (toolCalls: ConverseResult["toolCalls"], text = ""): ConverseResult => ({
+    text,
+    toolCalls,
+    finishReason: "length",
+  })
+
+  it("refuses a terminal call on a length-truncated turn, even one that parsed, and lets the model answer again", async () => {
+    const provider = new ScriptedProvider([
+      lengthTurn([{ id: "r1", name: "reply", input: { text: "cut mid-sent" } }]),
+      { ...callReply("whole", "r2"), finishReason: "tool_calls" },
+    ])
+    const { sink, events } = recordRunEvents()
+
+    const result = await runConversation({
+      provider,
+      system: "s",
+      messages: [{ role: "user", text: "go" }],
+      tools: [reply],
+      emit: sink,
+    })
+
+    expect(result.stopReason).toBe("terminal_tool")
+    expect(result.terminal?.callId).toBe("r2")
+    expect(result.finishReason).toBe("tool_calls")
+    // The refused call never ran, was answered as an error, and is in the stream as truncated.
+    const refused = result.messages[2]
+    expect(refused?.role === "tool" && refused.results[0]).toMatchObject({
+      toolCallId: "r1",
+      isError: true,
+    })
+    expect(refused?.role === "tool" && refused.results[0]?.content).toMatch(/cut off/)
+    expect(
+      events
+        .filter((e) => e.type === "tool.failed")
+        .map((e) => e.type === "tool.failed" && e.reason),
+    ).toEqual(["truncated"])
+    // Only the accepted retry ran; the refused call never reached `tool.called`.
+    expect(
+      events
+        .filter((e) => e.type === "tool.called")
+        .map((e) => e.type === "tool.called" && e.callId),
+    ).toEqual(["r2"])
+    expect(
+      events
+        .filter((e) => e.type === "model.turn")
+        .map((e) => e.type === "model.turn" && e.finishReason),
+    ).toEqual(["length", "tool_calls"])
+  })
+
+  it("refuses a call whose raw arguments do not parse, on any turn, and runs one that did", async () => {
+    const ran: unknown[] = []
+    const probe: Tool = {
+      spec: { name: "echo", description: "echo", inputSchema: { type: "object" } },
+      execute: async (input) => {
+        ran.push(input)
+        return "ok"
+      },
+    }
+    const provider = new ScriptedProvider([
+      {
+        text: "",
+        toolCalls: [
+          { id: "c1", name: "echo", input: {}, argumentsText: '{"v": 1, "w": [' },
+          { id: "c2", name: "echo", input: { v: 2 }, argumentsText: '{"v": 2}' },
+        ],
+        finishReason: "length",
+      },
+      prose("done"),
+    ])
+
+    const result = await runConversation({
+      provider,
+      system: "s",
+      messages: [{ role: "user", text: "go" }],
+      tools: [probe],
+    })
+
+    expect(ran).toEqual([{ v: 2 }])
+    const toolMsg = result.messages[2]
+    expect(toolMsg?.role === "tool" && toolMsg.results.map((r) => r.isError ?? false)).toEqual([
+      true,
+      false,
+    ])
+    expect(result.stopReason).toBe("end_turn")
+  })
+
+  it("refuses a call with no raw arguments on a length turn (Anthropic shape) and runs it on a whole turn", async () => {
+    const ran: string[] = []
+    const probe: Tool = {
+      spec: { name: "echo", description: "echo", inputSchema: { type: "object" } },
+      execute: async () => {
+        ran.push("ran")
+        return "ok"
+      },
+    }
+    // No argumentsText at all: the dialect handed over an object, so nothing
+    // proves the call was whole when the turn was cut.
+    const bare = { id: "c1", name: "echo", input: { v: 1 } }
+    const provider = new ScriptedProvider([
+      { text: "", toolCalls: [bare], finishReason: "length" },
+      { text: "", toolCalls: [{ ...bare, id: "c2" }], finishReason: "tool_calls" },
+      prose("done"),
+    ])
+    const result = await runConversation({
+      provider,
+      system: "s",
+      messages: [{ role: "user", text: "go" }],
+      tools: [probe],
+    })
+    expect(ran).toEqual(["ran"])
+    const first = result.messages[2]
+    expect(first?.role === "tool" && first.results[0]?.isError).toBe(true)
+  })
+
+  it("keeps runAgent resolving on a cancel, even when the last turn before the stop was cut", async () => {
+    const controller = new AbortController()
+    // Ignores its signal: cancels mid-call and still returns a cut-off turn.
+    const deaf: Provider = {
+      name: "deaf",
+      complete: async () => "",
+      converse: async () => {
+        controller.abort("user left")
+        return { text: "once upon a ti", toolCalls: [], finishReason: "length" }
+      },
+    }
+    const text = await runAgent({
+      provider: deaf,
+      system: "s",
+      userPrompt: "go",
+      tools: [],
+      signal: controller.signal,
+    })
+    expect(text).toContain("[run stopped: canceled")
+  })
+
+  it("makes runAgent throw when the budget summary itself was cut off", async () => {
+    const provider = new ScriptedProvider([
+      callEcho(),
+      { ...prose("the summary was cut at the ca"), finishReason: "length" },
+    ])
+    const run = () =>
+      runAgent({ provider, system: "s", userPrompt: "go", tools: [echo], maxSteps: 1 })
+    const err = await run().then(
+      () => {
+        throw new Error("expected runAgent to throw")
+      },
+      (e: unknown) => e as TruncatedAnswerError,
+    )
+    expect(err).toBeInstanceOf(TruncatedAnswerError)
+    expect(err.result.stopReason).toBe("steps_exhausted")
+    expect(err.result.finishReason).toBe("length")
+  })
+
+  it("refuses a call with empty arguments on a length turn and runs it on a whole turn", async () => {
+    const ran: string[] = []
+    const probe: Tool = {
+      spec: { name: "echo", description: "echo", inputSchema: { type: "object" } },
+      execute: async () => {
+        ran.push("ran")
+        return "ok"
+      },
+    }
+    const emptyCall = { id: "c1", name: "echo", input: {}, argumentsText: "" }
+    const provider = new ScriptedProvider([
+      { text: "", toolCalls: [emptyCall], finishReason: "length" },
+      { text: "", toolCalls: [{ ...emptyCall, id: "c2" }], finishReason: "tool_calls" },
+      prose("done"),
+    ])
+    const result = await runConversation({
+      provider,
+      system: "s",
+      messages: [{ role: "user", text: "go" }],
+      tools: [probe],
+    })
+    expect(ran).toEqual(["ran"])
+    const first = result.messages[2]
+    const second = result.messages[4]
+    expect(first?.role === "tool" && first.results[0]?.isError).toBe(true)
+    expect(second?.role === "tool" && second.results[0]?.isError).toBeUndefined()
+  })
+
+  it("makes runAgent throw on a cut-off answer, since a bare string cannot say so", async () => {
+    const run = () =>
+      runAgent({
+        provider: new ScriptedProvider([lengthTurn([], "once upon a ti")]),
+        system: "s",
+        userPrompt: "tell me a story",
+        tools: [],
+      })
+    await expect(run()).rejects.toBeInstanceOf(TruncatedAnswerError)
+    await expect(run()).rejects.toThrow(/runConversation/)
+    const err = await run().then(
+      () => {
+        throw new Error("expected runAgent to throw")
+      },
+      (e: unknown) => e as TruncatedAnswerError,
+    )
+    // The partial text and the whole run are still reachable from the error.
+    expect(err.text).toBe("once upon a ti")
+    expect(err.result.stopReason).toBe("length")
+    // A whole answer is unaffected.
+    await expect(
+      runAgent({
+        provider: new ScriptedProvider([{ ...prose("whole"), finishReason: "stop" }]),
+        system: "s",
+        userPrompt: "go",
+        tools: [],
+      }),
+    ).resolves.toBe("whole")
+  })
+
+  it("marks a cut-off prose answer with stopReason length while the run still completes", async () => {
+    const { sink, events } = recordRunEvents()
+    const result = await runConversation({
+      provider: new ScriptedProvider([lengthTurn([], "once upon a ti")]),
+      system: "s",
+      messages: [{ role: "user", text: "tell me a story" }],
+      tools: [],
+      emit: sink,
+    })
+    expect(result.outcome).toBe("completed")
+    expect(result.stopReason).toBe("length")
+    expect(result.finishReason).toBe("length")
+    expect(result.text).toBe("once upon a ti")
+    expect(events[events.length - 1]).toMatchObject({ type: "run.finished", stopReason: "length" })
+  })
+
+  it("still ends steps_exhausted when every attempt is truncated", async () => {
+    const provider = new ScriptedProvider([
+      lengthTurn([{ id: "r1", name: "reply", input: { text: "a" } }]),
+      lengthTurn([{ id: "r2", name: "reply", input: { text: "b" } }]),
+      { ...prose("summary"), finishReason: "stop" },
+    ])
+    const result = await runConversation({
+      provider,
+      system: "s",
+      messages: [{ role: "user", text: "go" }],
+      tools: [reply],
+      maxSteps: 2,
+    })
+    expect(result.stopReason).toBe("steps_exhausted")
+    expect(result.terminal).toBeUndefined()
+    expect(result.text).toBe("summary")
+  })
+
+  it("carries argumentsText and meta through the transcript untouched", async () => {
+    const provider = new ScriptedProvider([
+      {
+        text: "",
+        toolCalls: [
+          { id: "c1", name: "echo", input: { v: 1 }, argumentsText: '{"v":1}', meta: { sig: "s" } },
+        ],
+      },
+      prose("done"),
+    ])
+    const result = await runConversation({
+      provider,
+      system: "s",
+      messages: [{ role: "user", text: "go" }],
+      tools: [echo],
+    })
+    const assistant = result.messages[1]
+    expect(assistant?.role === "assistant" && assistant.toolCalls[0]).toMatchObject({
+      argumentsText: '{"v":1}',
+      meta: { sig: "s" },
+    })
+    // The second model call saw them too.
+    const replayed = provider.requests[1]?.messages[1]
+    expect(replayed?.role === "assistant" && replayed.toolCalls[0]?.meta).toEqual({ sig: "s" })
+  })
+
+  it("judges truncation from the raw text, and from the finish reason for empty text", () => {
+    const call = (argumentsText?: string) => ({
+      id: "x",
+      name: "n",
+      input: {},
+      ...(argumentsText !== undefined ? { argumentsText } : {}),
+    })
+    expect(isTruncatedCall(call())).toBe(false)
+    // Empty text is a zero-argument call on a whole turn and a cut-off on a `length` turn.
+    expect(isTruncatedCall(call(""))).toBe(false)
+    expect(isTruncatedCall(call("  "), "stop")).toBe(false)
+    expect(isTruncatedCall(call(""), "length")).toBe(true)
+    expect(isTruncatedCall(call("  "), "length")).toBe(true)
+    expect(isTruncatedCall(call("{}"))).toBe(false)
+    expect(isTruncatedCall(call("{}"), "length")).toBe(false)
+    expect(isTruncatedCall(call('{"a":1}'))).toBe(false)
+    expect(isTruncatedCall(call('{"a":'))).toBe(true)
+    expect(isTruncatedCall(call("[1,2]"))).toBe(true)
+    expect(isTruncatedCall(call("42"))).toBe(true)
   })
 })

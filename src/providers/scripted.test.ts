@@ -104,3 +104,28 @@ describe("ScriptedProvider", () => {
     expect(new ScriptedProvider([], { reportsUsage: true }).reportsUsage).toBe(true)
   })
 })
+
+describe("ScriptedProvider: raw arguments, meta and finish reason (0.11.0-next.1)", () => {
+  it("preserves argumentsText and meta on the turns it plays, detached", async () => {
+    const meta = { thoughtSignature: "sig-1" }
+    const provider = new ScriptedProvider([
+      {
+        text: "",
+        toolCalls: [{ id: "t", name: "x", input: { a: 1 }, argumentsText: '{"a":1}', meta }],
+        finishReason: "tool_calls",
+      },
+    ])
+    const played = await provider.converse(req("a"))
+    expect(played.finishReason).toBe("tool_calls")
+    expect(played.toolCalls[0]).toMatchObject({
+      argumentsText: '{"a":1}',
+      meta: { thoughtSignature: "sig-1" },
+    })
+    expect(played.toolCalls[0]?.meta).not.toBe(meta)
+  })
+
+  it("leaves finishReason absent when the script says nothing, so old scripts behave as before", async () => {
+    const played = await new ScriptedProvider([{ text: "ok", toolCalls: [] }]).converse(req("a"))
+    expect(played.finishReason).toBeUndefined()
+  })
+})

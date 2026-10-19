@@ -141,8 +141,22 @@ export interface OpenRouterOptions {
   transforms?: string[]
 }
 
+/**
+ * Which tool the model must call. `auto` lets it choose (the provider
+ * default), `required` forces some tool, `none` forbids tools, `{ name }`
+ * forces that one (the last step of a terminal-tool flow). Every adapter
+ * omits the setting on a request that carries no tools, which is what the
+ * loop's budget-summary call sends, so a forced choice never reaches a call
+ * that has nothing to choose from.
+ */
+export type ToolChoice = "auto" | "required" | "none" | { name: string }
+
 /** Everything a caller may hand an adapter for one request. */
 export interface ProviderOptions {
+  /** Sampling temperature, passed through as given. */
+  temperature?: number
+  /** Which tool the model must call; see {@link ToolChoice}. */
+  toolChoice?: ToolChoice
   /** Completion token cap for this call; overrides `RUNNER_MAX_TOKENS`. */
   maxTokens?: number
   /**

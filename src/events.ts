@@ -29,6 +29,7 @@
  */
 
 import type { Usage } from "./models/types.js"
+import type { FinishReason } from "./providers/types.js"
 
 /** Every event kind the loop emits. */
 export type RunEventType =
@@ -82,10 +83,12 @@ export type RunOutcome = "completed" | "steps_exhausted" | "timed_out" | "cancel
  * this is where a finer reason is added (a suspended run awaiting external
  * tool results, say) without touching every consumer's outcome switch.
  * `failed` is here for the same reason it is on `RunOutcome`: the native loop
- * throws instead, but a custom loop may report it.
+ * throws instead, but a custom loop may report it. `length` is a prose answer
+ * the output token cap cut short: the run `completed`, but a consumer should
+ * not apply the text as if it were whole.
  */
 export type StopReason =
-  "end_turn" | "terminal_tool" | "steps_exhausted" | "timed_out" | "canceled" | "failed"
+  "end_turn" | "terminal_tool" | "length" | "steps_exhausted" | "timed_out" | "canceled" | "failed"
 
 /**
  * Whether a tool's effect is safe to execute again after an interruption,
@@ -122,6 +125,8 @@ export interface ModelTurnEvent extends RunEventBase {
   responseId?: string
   /** Behind an aggregator, the upstream that served the request (OpenRouter's response-level `provider`). */
   upstream?: string
+  /** Why the model stopped generating, when the provider reported it. */
+  finishReason?: FinishReason
 }
 
 /**
@@ -207,13 +212,16 @@ export interface ToolSucceededEvent extends RunEventBase {
  *  `threw` because they mean different things to a consumer: one is a model
  *  hallucinating a name, the other is a real effect that may have partially
  *  landed. `aborted` is a tool stopped by the run's cancel or deadline — its
- *  effect may also have partially landed, but the tool did not fail. */
+ *  effect may also have partially landed, but the tool did not fail.
+ *  `truncated` is a call the loop refused to run because the output token cap
+ *  cut it off (a terminal call on a `length` turn, or arguments that do not
+ *  parse); nothing ran, and the model was told to answer again. */
 export interface ToolFailedEvent extends RunEventBase {
   type: "tool.failed"
   step: number
   callId: string
   name: string
-  reason: "threw" | "unknown_tool" | "aborted"
+  reason: "threw" | "unknown_tool" | "aborted" | "truncated"
   error: string
 }
 
