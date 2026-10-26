@@ -11,6 +11,13 @@ import type { Tool } from "../tools/registry.js"
 import type { WorkflowDefinition } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { environmentInstructions } from "./environment.js"
+import {
+  GATEWAY_PROVIDERS,
+  gatewayRoute,
+  refuseBadGateway,
+  refuseRawCredentialsInVm,
+} from "./gateway.js"
+import type { ProviderSelection } from "../providers/index.js"
 
 /**
  * Builds the non-generic tools a run gets on top of the primitives, gated by the
@@ -76,7 +83,10 @@ export class NativeEngine implements AgentEngine {
   supports(spec?: RunSpec): EngineSupport {
     if (!spec) return { ok: true }
     if (spec.private) return privateProviderSupport(spec)
-    return providerAvailability(spec.provider.preferred, spec.provider)
+    const refusal =
+      refuseBadGateway("native", spec) ?? refuseRawCredentialsInVm("native", spec, CLOUD_ENV_KEYS)
+    if (refusal) return refusal
+    return providerAvailability(spec.provider.preferred, providerSelection(spec))
   }
 
   async run(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {
@@ -121,7 +131,7 @@ export class NativeEngine implements AgentEngine {
     // The whole selection, not a hand-picked subset: `supports()` judged the
     // run on `spec.provider` (including `allowMockFallback`), so `run()` must
     // resolve it from the same object or the two can disagree.
-    const provider = selectProvider(spec.provider.preferred, spec.provider)
+    const provider = selectProvider(spec.provider.preferred, providerSelection(spec))
     // Belt and braces for the private path: whatever selection did, a private
     // run proceeds on the local provider or not at all.
     if (spec.private && provider.name !== "local") {
@@ -230,6 +240,33 @@ export class NativeEngine implements AgentEngine {
     )
     const assembled = renderContext(fragments)
     return spec.context ? `${spec.context}\n\n${assembled}` : assembled
+  }
+}
+
+/** The host env keys the cloud adapters fall back to. */
+const CLOUD_ENV_KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"] as const
+
+/**
+ * The provider selection the run resolves against. With a gateway, every
+ * cloud adapter is pointed at its gateway route and keyed with the run token,
+ * replacing the run's BYO keys — and, because a key is now always present, the
+ * host's env keys are never reached either. The `local` provider is not
+ * routed: private inference never leaves the host anyway.
+ */
+export function providerSelection(spec: RunSpec): ProviderSelection {
+  const gateway = spec.gateway
+  if (!gateway) return spec.provider
+  const token = gateway.runToken
+  const local = spec.provider.credentials?.local
+  return {
+    ...spec.provider,
+    credentials: {
+      anthropic: token,
+      openai: token,
+      openrouter: token,
+      ...(local !== undefined ? { local } : {}),
+    },
+    baseURLs: Object.fromEntries(GATEWAY_PROVIDERS.map((p) => [p, gatewayRoute(gateway, p)])),
   }
 }
 

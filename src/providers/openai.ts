@@ -364,7 +364,12 @@ export class OpenAICompatibleProvider implements Provider {
 }
 
 export class OpenAIProvider extends OpenAICompatibleProvider {
-  constructor(apiKey: string, model = process.env.OPENAI_MODEL ?? "gpt-4.1") {
-    super(OPENAI_ADAPTER, { apiKey, model })
+  constructor(
+    apiKey: string,
+    model = process.env.OPENAI_MODEL ?? "gpt-4.1",
+    /** Where requests go instead of the SDK's default (a credential gateway, a proxy). */
+    baseURL?: string,
+  ) {
+    super(OPENAI_ADAPTER, { apiKey, model, ...(baseURL !== undefined ? { baseURL } : {}) })
   }
 }

@@ -13,6 +13,12 @@ import { readEmissions } from "./capabilityEmissions.js"
 import { defaultAcpDriver } from "./acpDriver.js"
 import { harnessPrompt } from "./harnessPrompt.js"
 import { environmentInstructions } from "./environment.js"
+import {
+  gatewayEnv,
+  refuseBadGateway,
+  refuseRawCredentialsInVm,
+  withoutShadowed,
+} from "./gateway.js"
 
 const LOG_TRUNCATE = 2000
 
@@ -153,7 +159,13 @@ export class AcpEngine implements AgentEngine {
         reason: `${this.name} engine requires the ephemeral runner profile (per-run container isolation)`,
       }
     }
-    return refuseUnisolated(this.name, spec) ?? { ok: true }
+    // An ACP agent gets only the run's keys (never the host's), so only the
+    // payload's credentials count as raw here.
+    return (
+      refuseUnisolated(this.name, spec) ??
+      refuseBadGateway(this.name, spec) ??
+      refuseRawCredentialsInVm(this.name, spec) ?? { ok: true }
+    )
   }
 
   async run(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {
@@ -182,9 +194,24 @@ export class AcpEngine implements AgentEngine {
       args: this.agent.args(spec),
       // The capability env also rides on the process env so the stdio capability
       // server inherits it regardless of how the agent forwards `session/new` env.
-      env: { ...this.agent.env(spec), ...capabilityEnv },
+      //
+      // Through a gateway, the agent's own env is built from a spec with NO
+      // credentials (so an agent spec that copies keys copies none), every
+      // provider is pointed at its gateway route with the run token, and the
+      // provider prefixes are no longer inherited from the host.
+      env: spec.gateway
+        ? {
+            ...this.agent.env(withoutCredentials(spec)),
+            ...gatewayEnv(spec.gateway),
+            ...capabilityEnv,
+          }
+        : { ...this.agent.env(spec), ...capabilityEnv },
       ...(this.agent.inheritEnvPrefixes
-        ? { inheritEnvPrefixes: this.agent.inheritEnvPrefixes }
+        ? {
+            inheritEnvPrefixes: spec.gateway
+              ? withoutShadowed(this.agent.inheritEnvPrefixes)
+              : this.agent.inheritEnvPrefixes,
+          }
         : {}),
       cwd: spec.workdir,
       mcpServers: toAcpMcpServers(servers),
@@ -322,4 +349,10 @@ export const EVE_AGENT: AcpAgentSpec = {
     if (creds?.openrouter) env.OPENROUTER_API_KEY = creds.openrouter
     return env
   },
+}
+
+/** The spec as an agent sees it through a gateway: its provider with no keys. */
+function withoutCredentials(spec: RunSpec): RunSpec {
+  const { credentials: _dropped, ...provider } = spec.provider
+  return { ...spec, provider }
 }

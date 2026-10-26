@@ -40,12 +40,14 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
     apiKey: string,
     model = process.env.OPENROUTER_MODEL ?? OPENROUTER_DEFAULT_MODEL,
     attribution: OpenRouterAttribution = {},
+    /** Where requests go instead of openrouter.ai (a credential gateway, a proxy). */
+    baseURL: string = OPENROUTER_BASE_URL,
   ) {
     const headers = attributionHeaders(attribution)
     super("openrouter", {
       apiKey,
       model,
-      baseURL: OPENROUTER_BASE_URL,
+      baseURL,
       ...(Object.keys(headers).length > 0 ? { defaultHeaders: headers } : {}),
     })
   }

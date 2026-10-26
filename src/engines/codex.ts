@@ -12,6 +12,7 @@ import { readEmissions } from "./capabilityEmissions.js"
 import { defaultCodexDriver } from "./codexDriver.js"
 import { harnessPrompt } from "./harnessPrompt.js"
 import { environmentInstructions } from "./environment.js"
+import { gatewayEnv, refuseBadGateway, refuseRawCredentialsInVm } from "./gateway.js"
 
 /**
  * Driver-neutral options the engine derives from a {@link RunSpec} and hands to
@@ -25,8 +26,14 @@ export interface CodexOptions {
   cwd: string
   /** Model id (resolved: per-run model, else the engine default). */
   model: string
-  /** API key (per-org BYO, else the runner env key). */
+  /** API key (per-org BYO, else the runner env key). Never set when the run has a gateway. */
   apiKey?: string
+  /**
+   * The gateway env (base URL + run token) when the run has a credential
+   * gateway: the driver sets it INSTEAD of any key, and stops inheriting the
+   * host's `OPENAI_*` settings so nothing can route around it.
+   */
+  gatewayEnv?: Record<string, string>
   /**
    * The transient `CODEX_HOME` for this run — a temp dir OUTSIDE the sandbox that
    * holds the `config.toml` the engine wrote (the run's MCP servers). The driver
@@ -115,11 +122,18 @@ export class CodexEngine implements AgentEngine {
         reason: "codex engine requires the ephemeral runner profile (per-run container isolation)",
       }
     }
-    return refuseUnisolated("codex", spec) ?? { ok: true }
+    return (
+      refuseUnisolated("codex", spec) ??
+      refuseBadGateway("codex", spec) ??
+      refuseRawCredentialsInVm("codex", spec, ["OPENAI_API_KEY", "CODEX_API_KEY"]) ?? { ok: true }
+    )
   }
 
   async run(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {
-    const apiKey = spec.provider.credentials?.openai ?? process.env.OPENAI_API_KEY
+    // With a gateway the harness holds the run token and nothing else.
+    const apiKey = spec.gateway
+      ? undefined
+      : (spec.provider.credentials?.openai ?? process.env.OPENAI_API_KEY)
     const model = spec.provider.model || DEFAULT_MODEL
 
     // Emissions land OUTSIDE the sandbox so the bookkeeping file is never captured
@@ -176,6 +190,15 @@ export class CodexEngine implements AgentEngine {
       codexHome,
       capabilityEnv,
       ...(apiKey ? { apiKey } : {}),
+      ...(spec.gateway
+        ? {
+            gatewayEnv: {
+              ...gatewayEnv(spec.gateway, ["openai"]),
+              // `codex exec` prefers CODEX_API_KEY over OPENAI_API_KEY.
+              CODEX_API_KEY: spec.gateway.runToken,
+            },
+          }
+        : {}),
       ...(spec.limits?.maxDurationMs !== undefined
         ? { maxDurationMs: spec.limits.maxDurationMs }
         : {}),

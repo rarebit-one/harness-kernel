@@ -8,6 +8,7 @@ import { defaultClaudeCodeDriver } from "./claudeCodeDriver.js"
 import { writeFileCapability, type CapabilityContext, type CapabilityTool } from "./capability.js"
 import { harnessPrompt } from "./harnessPrompt.js"
 import { environmentInstructions, hasEnvironment, writeSkills } from "./environment.js"
+import { gatewayEnv, refuseBadGateway, refuseRawCredentialsInVm } from "./gateway.js"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -24,8 +25,14 @@ export interface ClaudeCodeOptions {
   cwd: string
   /** Model id (resolved: per-run model, else the engine default). */
   model: string
-  /** API key (per-org BYO, else the runner env key). */
+  /** API key (per-org BYO, else the runner env key). Never set when the run has a gateway. */
   apiKey?: string
+  /**
+   * The gateway env (base URL + run token) when the run has a credential
+   * gateway: the driver sets it INSTEAD of any key, and stops inheriting the
+   * host's `ANTHROPIC_*` settings so nothing can route around it.
+   */
+  gatewayEnv?: Record<string, string>
   /** Tool allowlist; undefined means the harness's defaults. */
   allowedTools?: string[]
   /** Wall-clock budget in ms; undefined means no engine-imposed limit. */
@@ -131,11 +138,19 @@ export class ClaudeCodeEngine implements AgentEngine {
           "claude-code engine requires the ephemeral runner profile (per-run container isolation)",
       }
     }
-    return refuseUnisolated("claude-code", spec) ?? { ok: true }
+    return (
+      refuseUnisolated("claude-code", spec) ??
+      refuseBadGateway("claude-code", spec) ??
+      refuseRawCredentialsInVm("claude-code", spec, ["ANTHROPIC_API_KEY"]) ?? { ok: true }
+    )
   }
 
   async run(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {
-    const apiKey = spec.provider.credentials?.anthropic ?? process.env.ANTHROPIC_API_KEY
+    // With a gateway the harness holds the run token and nothing else: no BYO
+    // key, and no fallback to the host's own.
+    const apiKey = spec.gateway
+      ? undefined
+      : (spec.provider.credentials?.anthropic ?? process.env.ANTHROPIC_API_KEY)
     const model = spec.provider.model || DEFAULT_MODEL
     const allowedTools =
       Array.isArray(spec.permissions.tools) && spec.permissions.tools.length > 0
@@ -157,6 +172,7 @@ export class ClaudeCodeEngine implements AgentEngine {
       mcpTools,
       ...(spec.connectors.length > 0 ? { connectors: spec.connectors } : {}),
       ...(apiKey ? { apiKey } : {}),
+      ...(spec.gateway ? { gatewayEnv: gatewayEnv(spec.gateway, ["anthropic"]) } : {}),
       ...(allowedTools ? { allowedTools } : {}),
       ...(spec.limits?.maxDurationMs !== undefined
         ? { maxDurationMs: spec.limits.maxDurationMs }
