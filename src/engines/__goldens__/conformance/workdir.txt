@@ -1,0 +1,13 @@
+=== workdir
+.agents/skills/csv-report/SKILL.md  96B
+.agents/skills/csv-report/scripts/report.py  16B
+AGENTS.md  65B
+campaigns/AGENTS.md  26B
+data/rates.csv  23B
+=== AGENTS.md
+# Conventions
+
+Currency is SGD unless stated.
+
+# Workspace rules
+

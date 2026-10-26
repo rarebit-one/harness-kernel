@@ -12,6 +12,7 @@ import { connectorServers, type SerializableMcpServer } from "./connectorMcp.js"
 import { readEmissions } from "./capabilityEmissions.js"
 import { defaultAcpDriver } from "./acpDriver.js"
 import { harnessPrompt } from "./harnessPrompt.js"
+import { environmentInstructions } from "./environment.js"
 
 const LOG_TRUNCATE = 2000
 
@@ -187,7 +188,13 @@ export class AcpEngine implements AgentEngine {
         : {}),
       cwd: spec.workdir,
       mcpServers: toAcpMcpServers(servers),
-      prompt: harnessPrompt(spec),
+      // ACP's session/new has no system-prompt field, so the environment's
+      // system instructions and skills index lead the task prompt; the agent
+      // reads the workdir's AGENTS.md (materialized by the caller) itself.
+      prompt: harnessPrompt(
+        spec,
+        environmentInstructions(spec, { agentsMd: false, skillsIndex: true }),
+      ),
       ...(spec.limits?.maxDurationMs !== undefined
         ? { maxDurationMs: spec.limits.maxDurationMs }
         : {}),
