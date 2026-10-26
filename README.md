@@ -570,7 +570,16 @@ A malformed gateway fails `supports()` rather than being ignored.
 Independently of the gateway, every engine refuses a run whose `isolation` is
 `vm` when it holds raw model credentials (a `provider.credentials` slot, or the
 host key that engine would fall back to). A microVM run reaches models through a
-gateway or not at all.
+gateway or not at all. The private (local-inference) native path gets the same
+checks.
+
+A `vm` run is also refused when it holds **exposed** credentials, which no
+gateway can inject and which therefore reach the guest in the clear: non-empty
+`secrets`, or a connector credential the harness carries itself (`auth.token`,
+or `headers` / `env` values on a caller's connector shape). A connector whose
+token is the gateway's run token is routed, not exposed. The caller's policy can
+lift this with `RunSpec.exposedCredentials: "allowed"`; absent, it refuses.
+Below `vm` nothing changes.
 
 ### The kernel defines no domain tools
 

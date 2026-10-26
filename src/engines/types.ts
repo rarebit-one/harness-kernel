@@ -102,6 +102,14 @@ export interface RunSpec {
    * that a `vm` run holding raw credentials is refused.
    */
   gateway?: RunGateway
+  /**
+   * Whether a `vm` run may hold exposed credentials — `secrets`, or a
+   * connector credential the harness carries itself — which reach the guest
+   * in the clear because no gateway can inject them. Absent (or anything but
+   * `"allowed"`) refuses such a run; only the caller's policy should set it,
+   * never a workflow author. Ignored below `vm`.
+   */
+  exposedCredentials?: "allowed" | "refused"
 }
 
 export interface EngineContext {

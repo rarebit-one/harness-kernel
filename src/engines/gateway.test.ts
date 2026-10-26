@@ -339,3 +339,167 @@ describe("native engine through a gateway", () => {
     })
   })
 })
+
+// Regressions from the independent review (REVIEW.md F5, F6); each began as
+// the reviewer's repro, which asserted nothing and printed `{"ok":true}`.
+describe("review regressions: vm credential refusals", () => {
+  const vmFlags = { RUNNER_ENABLE_CLAUDE_CODE: "1", RUNNER_ISOLATION: "vm" }
+
+  it("F5: a private native vm run with a raw cloud key is refused like any other", async () => {
+    await withEnv({ LOCAL_MODEL_BASE_URL: "http://127.0.0.1:11434/v1" }, () => {
+      const refused = new NativeEngine().supports(
+        spec("/tmp", {
+          private: true,
+          isolation: "vm",
+          provider: { preferred: "local", credentials: { anthropic: "sk-ant-LEAK" } },
+        }),
+      )
+      expect(refused.ok).toBe(false)
+      expect(!refused.ok && refused.reason).toMatch(
+        /native engine refuses a vm run holding raw model credentials \(provider.credentials.anthropic\)/,
+      )
+      expect(!refused.ok && refused.reason).not.toContain("LEAK")
+    })
+  })
+
+  it("F5: a private native run with a malformed gateway is refused", async () => {
+    await withEnv({ LOCAL_MODEL_BASE_URL: "http://127.0.0.1:11434/v1" }, () => {
+      const refused = new NativeEngine().supports(
+        spec("/tmp", {
+          private: true,
+          provider: { preferred: "local" },
+          gateway: { ...GATEWAY, baseUrl: "not-a-url" },
+        }),
+      )
+      expect(!refused.ok && refused.reason).toMatch(/cannot use this run's gateway/)
+    })
+  })
+
+  it("F5: a private native run that is clean still passes (local inference only)", async () => {
+    await withEnv(
+      {
+        LOCAL_MODEL_BASE_URL: "http://127.0.0.1:11434/v1",
+        ANTHROPIC_API_KEY: undefined,
+        OPENAI_API_KEY: undefined,
+        OPENROUTER_API_KEY: undefined,
+      },
+      () => {
+        expect(
+          new NativeEngine().supports(
+            spec("/tmp", { private: true, isolation: "vm", provider: { preferred: "local" } }),
+          ),
+        ).toEqual({ ok: true })
+      },
+    )
+  })
+
+  it("F6: vm + gateway + an exposed secret and connector bearer is refused, naming them only", async () => {
+    await withEnv(vmFlags, () => {
+      const refused = new ClaudeCodeEngine().supports(
+        spec("/tmp", {
+          isolation: "vm",
+          gateway: GATEWAY,
+          provider: {},
+          secrets: { STRIPE_KEY: "sk_live_LEAK" },
+          connectors: [
+            {
+              name: "c",
+              kind: "mcp",
+              transport: "streamable_http",
+              endpoint: "https://mcp.example.com",
+              auth: { type: "bearer", token: "LEAK-OAUTH" },
+            },
+            // The reviewer's shape: headers a caller's connector type adds.
+            {
+              name: "h",
+              type: "http",
+              url: "https://mcp.example.com",
+              headers: { Authorization: "Bearer LEAK-OAUTH" },
+            } as never,
+          ],
+        }),
+      )
+      expect(refused.ok).toBe(false)
+      const reason = !refused.ok ? refused.reason : ""
+      expect(reason).toContain("claude-code engine refuses a vm run holding exposed credentials")
+      expect(reason).toContain("secret STRIPE_KEY")
+      expect(reason).toContain("connector c auth.token")
+      expect(reason).toContain("connector h headers")
+      expect(reason).not.toContain("LEAK")
+    })
+  })
+
+  it("F6: the explicit policy allowance lets the same run through", async () => {
+    await withEnv(vmFlags, () => {
+      expect(
+        new ClaudeCodeEngine().supports(
+          spec("/tmp", {
+            isolation: "vm",
+            gateway: GATEWAY,
+            provider: {},
+            secrets: { STRIPE_KEY: "sk_live_x" },
+            exposedCredentials: "allowed",
+          }),
+        ),
+      ).toEqual({ ok: true })
+    })
+  })
+
+  it("F6: a connector routed through the gateway (token = run token) is not exposed", async () => {
+    await withEnv(vmFlags, () => {
+      expect(
+        new ClaudeCodeEngine().supports(
+          spec("/tmp", {
+            isolation: "vm",
+            gateway: GATEWAY,
+            provider: {},
+            connectors: [
+              {
+                name: "routed",
+                kind: "mcp",
+                transport: "streamable_http",
+                endpoint: "https://gw.example.com/c/routed",
+                auth: { type: "bearer", token: GATEWAY.runToken },
+              },
+            ],
+          }),
+        ),
+      ).toEqual({ ok: true })
+    })
+  })
+
+  it("F6: exposed credentials are untouched below vm", async () => {
+    await withEnv({ RUNNER_ENABLE_CLAUDE_CODE: "1", RUNNER_ISOLATION: "container" }, () => {
+      expect(
+        new ClaudeCodeEngine().supports(
+          spec("/tmp", { isolation: "container", secrets: { STRIPE_KEY: "sk_live_x" } }),
+        ),
+      ).toEqual({ ok: true })
+    })
+  })
+
+  it.each([
+    ["native", () => new NativeEngine()],
+    ["codex", () => new CodexEngine(undefined, SCRIPT)],
+    ["eve", () => new AcpEngine(EVE_AGENT, SCRIPT)],
+  ] as const)("F6: %s refuses an exposed secret under vm too", async (name, make) => {
+    await withEnv(
+      { RUNNER_ENABLE_CODEX: "1", RUNNER_ENABLE_EVE: "1", RUNNER_ISOLATION: "vm" },
+      () => {
+        const refused = make().supports(
+          spec("/tmp", {
+            isolation: "vm",
+            gateway: GATEWAY,
+            provider: { preferred: "anthropic" },
+            secrets: { TOKEN: "x" },
+          }),
+        )
+        expect(!refused.ok && refused.reason).toMatch(
+          new RegExp(
+            `${name} engine refuses a vm run holding exposed credentials \\(secret TOKEN\\)`,
+          ),
+        )
+      },
+    )
+  })
+})

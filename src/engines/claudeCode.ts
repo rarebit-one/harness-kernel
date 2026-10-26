@@ -8,7 +8,7 @@ import { defaultClaudeCodeDriver } from "./claudeCodeDriver.js"
 import { writeFileCapability, type CapabilityContext, type CapabilityTool } from "./capability.js"
 import { harnessPrompt } from "./harnessPrompt.js"
 import { environmentInstructions, hasEnvironment, writeSkills } from "./environment.js"
-import { gatewayEnv, refuseBadGateway, refuseRawCredentialsInVm } from "./gateway.js"
+import { gatewayEnv, refuseBadGateway, refuseCredentialsInVm } from "./gateway.js"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -141,7 +141,7 @@ export class ClaudeCodeEngine implements AgentEngine {
     return (
       refuseUnisolated("claude-code", spec) ??
       refuseBadGateway("claude-code", spec) ??
-      refuseRawCredentialsInVm("claude-code", spec, ["ANTHROPIC_API_KEY"]) ?? { ok: true }
+      refuseCredentialsInVm("claude-code", spec, ["ANTHROPIC_API_KEY"]) ?? { ok: true }
     )
   }
 

@@ -12,7 +12,7 @@ import { readEmissions } from "./capabilityEmissions.js"
 import { defaultCodexDriver } from "./codexDriver.js"
 import { harnessPrompt } from "./harnessPrompt.js"
 import { environmentInstructions } from "./environment.js"
-import { gatewayEnv, refuseBadGateway, refuseRawCredentialsInVm } from "./gateway.js"
+import { gatewayEnv, refuseBadGateway, refuseCredentialsInVm } from "./gateway.js"
 
 /**
  * Driver-neutral options the engine derives from a {@link RunSpec} and hands to
@@ -125,7 +125,7 @@ export class CodexEngine implements AgentEngine {
     return (
       refuseUnisolated("codex", spec) ??
       refuseBadGateway("codex", spec) ??
-      refuseRawCredentialsInVm("codex", spec, ["OPENAI_API_KEY", "CODEX_API_KEY"]) ?? { ok: true }
+      refuseCredentialsInVm("codex", spec, ["OPENAI_API_KEY", "CODEX_API_KEY"]) ?? { ok: true }
     )
   }
 

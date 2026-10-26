@@ -13,12 +13,7 @@ import { readEmissions } from "./capabilityEmissions.js"
 import { defaultAcpDriver } from "./acpDriver.js"
 import { harnessPrompt } from "./harnessPrompt.js"
 import { environmentInstructions } from "./environment.js"
-import {
-  gatewayEnv,
-  refuseBadGateway,
-  refuseRawCredentialsInVm,
-  withoutShadowed,
-} from "./gateway.js"
+import { gatewayEnv, refuseBadGateway, refuseCredentialsInVm, withoutShadowed } from "./gateway.js"
 
 const LOG_TRUNCATE = 2000
 
@@ -164,7 +159,7 @@ export class AcpEngine implements AgentEngine {
     return (
       refuseUnisolated(this.name, spec) ??
       refuseBadGateway(this.name, spec) ??
-      refuseRawCredentialsInVm(this.name, spec) ?? { ok: true }
+      refuseCredentialsInVm(this.name, spec) ?? { ok: true }
     )
   }
 

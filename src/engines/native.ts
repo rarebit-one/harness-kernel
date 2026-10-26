@@ -15,7 +15,7 @@ import {
   GATEWAY_PROVIDERS,
   gatewayRoute,
   refuseBadGateway,
-  refuseRawCredentialsInVm,
+  refuseCredentialsInVm,
 } from "./gateway.js"
 import type { ProviderSelection } from "../providers/index.js"
 
@@ -82,10 +82,13 @@ export class NativeEngine implements AgentEngine {
    */
   supports(spec?: RunSpec): EngineSupport {
     if (!spec) return { ok: true }
-    if (spec.private) return privateProviderSupport(spec)
+    // Before the private branch: a private run is held to local inference, but
+    // a vm run must still carry no raw or exposed credentials, and a
+    // malformed gateway is refused whatever the run is.
     const refusal =
-      refuseBadGateway("native", spec) ?? refuseRawCredentialsInVm("native", spec, CLOUD_ENV_KEYS)
+      refuseBadGateway("native", spec) ?? refuseCredentialsInVm("native", spec, CLOUD_ENV_KEYS)
     if (refusal) return refusal
+    if (spec.private) return privateProviderSupport(spec)
     return providerAvailability(spec.provider.preferred, providerSelection(spec))
   }
 

@@ -131,6 +131,78 @@ export function refuseRawCredentialsInVm(
   }
 }
 
+/**
+ * The other half of the microVM rule: credentials the guest would hold in the
+ * clear that are NOT model keys. A gateway cannot inject these, so they are
+ * "exposed" — the run's `secrets` (they become the agent's env), and any
+ * connector credential the harness would carry itself (a bearer `auth.token`,
+ * or `headers` / `env` values a caller's connector shape adds).
+ *
+ * Under `vm` they are refused unless the spec says
+ * `exposedCredentials: "allowed"`, which only the caller's policy may set
+ * (the owner has not decided when exposed credentials are acceptable in a
+ * microVM, so the default is refuse). A connector whose token IS the
+ * gateway's run token is not exposed: that is a connector routed through the
+ * gateway, which injects the real credential host-side. The reason names
+ * secrets and connectors, never values.
+ */
+export function refuseExposedCredentialsInVm(
+  engine: string,
+  spec: Pick<RunSpec, "isolation" | "gateway" | "secrets" | "connectors" | "exposedCredentials">,
+): { ok: false; reason: string } | undefined {
+  if (spec.isolation !== "vm" || spec.exposedCredentials === "allowed") return undefined
+  const runToken = spec.gateway?.runToken
+  const exposed = [
+    ...Object.entries(spec.secrets ?? {})
+      .filter(([, value]) => typeof value === "string" && value !== "")
+      .map(([name]) => `secret ${name}`),
+    ...(spec.connectors ?? []).flatMap((connector) => {
+      const found: string[] = []
+      const token = connector.auth?.token
+      if (typeof token === "string" && token !== "" && token !== runToken) {
+        found.push(`connector ${connector.name} auth.token`)
+      }
+      // Not part of ConnectorConfig, but a caller's connector may carry them,
+      // and whatever is there reaches the harness.
+      const extra = connector as unknown as { headers?: unknown; env?: unknown }
+      for (const field of ["headers", "env"] as const) {
+        const values = extra[field]
+        if (
+          values &&
+          typeof values === "object" &&
+          Object.values(values).some((v) => v !== "" && v != null)
+        ) {
+          found.push(`connector ${connector.name} ${field}`)
+        }
+      }
+      return found
+    }),
+  ]
+  if (exposed.length === 0) return undefined
+  return {
+    ok: false,
+    reason:
+      `${engine} engine refuses a vm run holding exposed credentials (${exposed.join(", ")}); ` +
+      'they reach the guest in the clear, so they need exposedCredentials: "allowed" from policy',
+  }
+}
+
+/** Every credential refusal a `vm` run gets: raw model keys first, then exposed credentials. */
+export function refuseCredentialsInVm(
+  engine: string,
+  spec: Pick<
+    RunSpec,
+    "isolation" | "gateway" | "provider" | "secrets" | "connectors" | "exposedCredentials"
+  >,
+  hostKeys: readonly string[] = [],
+  env: NodeJS.ProcessEnv = process.env,
+): { ok: false; reason: string } | undefined {
+  return (
+    refuseRawCredentialsInVm(engine, spec, hostKeys, env) ??
+    refuseExposedCredentialsInVm(engine, spec)
+  )
+}
+
 /** The refusal for a spec whose gateway is unusable, in `supports()` shape. */
 export function refuseBadGateway(
   engine: string,
