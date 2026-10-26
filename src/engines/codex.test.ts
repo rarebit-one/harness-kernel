@@ -93,6 +93,21 @@ describe("CodexEngine.run", () => {
     expect(ctx.logs.some((l) => l.includes("working"))).toBe(true)
   })
 
+  it("puts the run's pre-assembled context in the prompt", async () => {
+    let captured: CodexOptions | undefined
+    async function* driver(opts: CodexOptions): AsyncIterable<CodexMessage> {
+      captured = opts
+      yield { kind: "result", text: "ok", isError: false }
+    }
+    await new CodexEngine(driver, SCRIPT).run(
+      spec({ context: "### notes.md\nThe deadline is Friday." }, workdir),
+      recordingCtx(),
+    )
+    expect(captured?.prompt).toContain(
+      "## Workspace context\n### notes.md\nThe deadline is Friday.",
+    )
+  })
+
   it("writes a codex config.toml with the capability stdio server + connectors, then deletes it", async () => {
     let configDuringRun = ""
     let codexHome = ""

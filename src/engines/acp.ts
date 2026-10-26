@@ -11,6 +11,7 @@ import { CAPABILITY_SERVER_NAME } from "./capabilityMcp.js"
 import { connectorServers, type SerializableMcpServer } from "./connectorMcp.js"
 import { readEmissions } from "./capabilityEmissions.js"
 import { defaultAcpDriver } from "./acpDriver.js"
+import { harnessPrompt } from "./harnessPrompt.js"
 
 const LOG_TRUNCATE = 2000
 
@@ -186,7 +187,7 @@ export class AcpEngine implements AgentEngine {
         : {}),
       cwd: spec.workdir,
       mcpServers: toAcpMcpServers(servers),
-      prompt: buildPrompt(spec),
+      prompt: harnessPrompt(spec),
       ...(spec.limits?.maxDurationMs !== undefined
         ? { maxDurationMs: spec.limits.maxDurationMs }
         : {}),
@@ -284,22 +285,6 @@ function toAcpMcpServers(servers: Record<string, SerializableMcpServer>): McpSer
       headers: Object.entries(server.headers ?? {}).map(([key, value]) => ({ name: key, value })),
     }
   })
-}
-
-function buildPrompt(spec: RunSpec): string {
-  const inputs = JSON.stringify(spec.inputs ?? {}, null, 2)
-  return [
-    spec.workflow.prompt ?? `Execute the "${spec.workflow.name ?? spec.workflowPath}" workflow.`,
-    "",
-    "## Inputs",
-    "```json",
-    inputs,
-    "```",
-    "",
-    "You are running as an autonomous workflow. The current working directory is the",
-    "workspace — inspect and edit its files directly with your tools. When finished,",
-    "reply with the workflow's output as Markdown.",
-  ].join("\n")
 }
 
 function truncate(text: string, max: number): string {

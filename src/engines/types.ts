@@ -25,8 +25,10 @@ export interface RunSpec {
   workflow: WorkflowDefinition
   /** The run's structured inputs (context_bundle.inputs). */
   inputs: Record<string, unknown>
-  /** Pre-assembled curated context text. The native loop bakes it into the
-   *  prompt; a filesystem-native engine (Claude Code) may ignore it and explore. */
+  /** Pre-assembled curated context text. Every engine puts it in the task
+   *  prompt — the native loop always, an out-of-process harness (Claude Code,
+   *  codex, ACP) whenever it is non-empty — since it may carry material that is
+   *  not on disk for the harness to find. */
   context: string
   /** Absolute path to the prepared sandbox working tree (the engine edits here). */
   workdir: string
