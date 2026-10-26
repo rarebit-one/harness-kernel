@@ -69,6 +69,21 @@ describe("ClaudeCodeEngine.run", () => {
     expect(ctx.logs.some((l) => l.includes("working on it"))).toBe(true)
   })
 
+  it("puts the run's pre-assembled context in the prompt", async () => {
+    let captured: ClaudeCodeOptions | undefined
+    async function* driver(opts: ClaudeCodeOptions): AsyncIterable<ClaudeCodeMessage> {
+      captured = opts
+      yield { kind: "result", text: "ok", isError: false }
+    }
+    await new ClaudeCodeEngine(driver).run(
+      spec({ context: "### notes.md\nThe deadline is Friday." }),
+      recordingCtx(),
+    )
+    expect(captured?.prompt).toContain(
+      "## Workspace context\n### notes.md\nThe deadline is Friday.",
+    )
+  })
+
   it("passes the run's connectors to the driver (mounted as mcpServers there)", async () => {
     let captured: ClaudeCodeOptions | undefined
     async function* driver(opts: ClaudeCodeOptions): AsyncIterable<ClaudeCodeMessage> {

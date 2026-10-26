@@ -10,6 +10,7 @@ import { CAPABILITY_SERVER_NAME } from "./capabilityMcp.js"
 import { connectorServers, writeCodexConfig, type SerializableMcpServer } from "./connectorMcp.js"
 import { readEmissions } from "./capabilityEmissions.js"
 import { defaultCodexDriver } from "./codexDriver.js"
+import { harnessPrompt } from "./harnessPrompt.js"
 
 /**
  * Driver-neutral options the engine derives from a {@link RunSpec} and hands to
@@ -158,7 +159,7 @@ export class CodexEngine implements AgentEngine {
     await writeCodexConfig(codexHome, servers)
 
     const options: CodexOptions = {
-      prompt: buildPrompt(spec),
+      prompt: harnessPrompt(spec),
       cwd: spec.workdir,
       model,
       codexHome,
@@ -221,22 +222,6 @@ export class CodexEngine implements AgentEngine {
       outcome,
     }
   }
-}
-
-function buildPrompt(spec: RunSpec): string {
-  const inputs = JSON.stringify(spec.inputs ?? {}, null, 2)
-  return [
-    spec.workflow.prompt ?? `Execute the "${spec.workflow.name ?? spec.workflowPath}" workflow.`,
-    "",
-    "## Inputs",
-    "```json",
-    inputs,
-    "```",
-    "",
-    "You are running as an autonomous workflow. The current working directory is the",
-    "workspace — inspect and edit its files directly with your tools. When finished,",
-    "reply with the workflow's output as Markdown.",
-  ].join("\n")
 }
 
 function truncate(text: string, max: number): string {

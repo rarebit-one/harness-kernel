@@ -110,6 +110,17 @@ describe("AcpEngine.run", () => {
     expect(ctx.logs.some((l) => l.includes("tool: edit_file"))).toBe(true)
   })
 
+  it("puts the run's pre-assembled context in the prompt", async () => {
+    const drive = fakeDriver(async () => ({ stopReason: "end_turn" }))
+    await new AcpEngine(EVE_AGENT, SCRIPT, drive).run(
+      spec({ context: "### notes.md\nThe deadline is Friday." }, workdir),
+      recordingCtx(),
+    )
+    expect(drive.captured?.prompt).toContain(
+      "## Workspace context\n### notes.md\nThe deadline is Friday.",
+    )
+  })
+
   it("hands the capability server + connectors to the agent as ACP mcpServers", async () => {
     const drive = fakeDriver(async () => ({ stopReason: "end_turn" }))
     const connectors: ConnectorConfig[] = [
