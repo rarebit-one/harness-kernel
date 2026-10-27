@@ -95,6 +95,44 @@ describe("selectProvider", () => {
     expect(selectProvider("anthropic").name).toBe("anthropic")
   })
 
+  it("ignores the host env keys when envFallback is false", () => {
+    clearKeys()
+    process.env.ANTHROPIC_API_KEY = "sk-env"
+    process.env.OPENAI_API_KEY = "sk-env"
+    // A caller that resolves credentials itself sent none: the run fails
+    // instead of landing on the host's unmetered key.
+    expect(() => selectProvider("anthropic", { envFallback: false })).toThrow(
+      ProviderCredentialsError,
+    )
+    expect(() => selectProvider(null, { envFallback: false })).toThrow(ProviderCredentialsError)
+    expect(providerAvailability("openai", { envFallback: false })).toMatchObject({ ok: false })
+    // The message and `missing` name only the slot that would satisfy it now.
+    try {
+      selectProvider("anthropic", { envFallback: false })
+    } catch (err) {
+      const e = err as ProviderCredentialsError
+      expect(e.missing).toEqual(["credentials.anthropic"])
+      expect(e.message).toMatch(/envFallback is false/)
+      expect(e.message).not.toMatch(/ANTHROPIC_API_KEY/)
+    }
+    // A key passed with the run still wins, and the mock opt-in still applies.
+    expect(
+      selectProvider("anthropic", { envFallback: false, credentials: { anthropic: "sk-run" } })
+        .name,
+    ).toBe("anthropic")
+    expect(selectProvider("anthropic", { envFallback: false, allowMockFallback: true }).name).toBe(
+      "mock",
+    )
+    // Explicit true is the default.
+    expect(selectProvider("anthropic", { envFallback: true }).name).toBe("anthropic")
+  })
+
+  it("keeps local on its env base URL and key when envFallback is false", () => {
+    clearKeys()
+    process.env.LOCAL_MODEL_BASE_URL = "http://localhost:11434/v1"
+    expect(selectProvider("local", { envFallback: false }).name).toBe("local")
+  })
+
   it("selects openrouter from OPENROUTER_API_KEY when preferred", () => {
     clearKeys()
     process.env.OPENROUTER_API_KEY = "sk-env-openrouter"
