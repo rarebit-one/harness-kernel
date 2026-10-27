@@ -310,6 +310,15 @@ is reached only by request (`selectProvider("mock")`) or by explicit opt-in
 0.11 a keyless run landed on the mock silently and reported success; nothing on
 the wire told that run from a real one.
 
+A key passed in `credentials` wins; otherwise each cloud provider falls back to
+the host's `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY`. A
+caller that resolves and meters credentials itself sets `{ envFallback: false }`,
+so a run it sent no key for fails with `ProviderCredentialsError` instead of
+quietly spending whatever key the host process holds. `local` is self-hosted and
+keeps its env base URL and key either way. The option governs `selectProvider`
+(and so the native engine); vendor-CLI engines take their keys from the child
+environment the caller builds.
+
 ### Conversations and terminal tools
 
 `runAgent` is single-shot. A conversational application seeds the loop with its

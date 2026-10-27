@@ -286,8 +286,11 @@ export function providerSelection(
 
   let preferred = spec.provider.preferred
   if (typeof preferred !== "string" || preferred.trim() === "") {
+    // Same lookup as resolveKeys: a host env key counts only while envFallback
+    // allows it, so an opted-out run is never pinned (or made eligible) by one.
+    const hostKeys = spec.provider.envFallback !== false
     const configured = GATEWAY_PROVIDERS.find(
-      (p) => spec.provider.credentials?.[p] ?? env[CLOUD_ENV_KEYS[p]],
+      (p) => spec.provider.credentials?.[p] ?? (hostKeys ? env[CLOUD_ENV_KEYS[p]] : undefined),
     )
     // Nothing would resolve, so every cloud slot is absent or deliberately
     // empty; keep them as sent, since an empty slot is what stops the host key.

@@ -367,6 +367,19 @@ describe("native engine through a gateway", () => {
     )
   })
 
+  it("ignores host env keys when pinning once envFallback is false", () => {
+    const hostAnthropic = { ANTHROPIC_API_KEY: "sk-ant-LEAK-host" }
+    const openaiOnly = spec("/sandbox", {
+      gateway: GATEWAY,
+      provider: { credentials: { openai: "sk-oai-LEAK-byo" }, envFallback: false },
+    })
+    expect(providerSelection(openaiOnly, hostAnthropic).preferred).toBe("openai")
+    const keyless = spec("/sandbox", { gateway: GATEWAY, provider: { envFallback: false } })
+    const selection = providerSelection(keyless, hostAnthropic)
+    expect(selection.preferred).toBeUndefined()
+    expect(JSON.stringify(selection)).not.toContain(GATEWAY.runToken)
+  })
+
   it("keeps an empty slot when nothing resolves, so the host key stays suppressed", () => {
     const suppressed = spec("/sandbox", {
       gateway: GATEWAY,

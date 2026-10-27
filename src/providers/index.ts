@@ -27,6 +27,16 @@ export interface ProviderSelection {
    * `preferred: "mock"` needs no opt-in; that is a request, not a fallback.
    */
   allowMockFallback?: boolean
+  /**
+   * Fall back to the host's `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` /
+   * `OPENROUTER_API_KEY` when `credentials` has no key for a cloud provider.
+   * On by default. A consumer that meters credentials per layer and resolves
+   * them itself sets `false`, so a run it sent no key for fails with a
+   * {@link ProviderCredentialsError} instead of landing on whatever key the
+   * host process holds, an unmetered fallback nothing records. The `local`
+   * provider is self-hosted and keeps its env base URL and key either way.
+   */
+  envFallback?: boolean
 }
 
 /** The outcome of {@link providerAvailability}: mirrors `AgentEngine.supports()`. */
@@ -63,18 +73,31 @@ function isCloud(name: string | null | undefined): name is Cloud {
   return (CLOUD as readonly string[]).includes(name ?? "")
 }
 
-/** The resolved key per cloud provider: the org's BYO key, else the host's env key. */
+/**
+ * The resolved key per cloud provider: the org's BYO key, else (unless the
+ * caller opted out with `envFallback: false`) the host's env key.
+ */
 function resolveKeys(opts: ProviderSelection): Record<Cloud, string | undefined> {
-  return {
-    anthropic: opts.credentials?.anthropic ?? process.env.ANTHROPIC_API_KEY,
-    openai: opts.credentials?.openai ?? process.env.OPENAI_API_KEY,
-    openrouter: opts.credentials?.openrouter ?? process.env.OPENROUTER_API_KEY,
-  }
+  const env = opts.envFallback !== false
+  const key = (name: Cloud) =>
+    opts.credentials?.[name] ?? (env ? process.env[ENV_KEY[name]] : undefined)
+  return { anthropic: key("anthropic"), openai: key("openai"), openrouter: key("openrouter") }
 }
 
 /** What satisfies a provider's credential, for the error message. */
-function wouldSatisfy(name: Cloud): string[] {
-  return [ENV_KEY[name], `credentials.${name}`]
+function wouldSatisfy(name: Cloud, opts: ProviderSelection): string[] {
+  return opts.envFallback === false
+    ? [`credentials.${name}`]
+    : [ENV_KEY[name], `credentials.${name}`]
+}
+
+/** How to supply a key, for the error message: the host env is no option once opted out. */
+function howToSet(names: Cloud[], opts: ProviderSelection): string {
+  const slots = names.map((n) => `credentials.${n}`).join(", ")
+  if (opts.envFallback === false) {
+    return `pass ${names.length > 1 ? "one of " : ""}${slots} with the run (host env keys are off: envFallback is false)`
+  }
+  return `set ${names.length > 1 ? "one of " : ""}${names.map((n) => ENV_KEY[n]).join(", ")} on the host or pass ${names.length > 1 ? "credentials" : slots} with the run`
 }
 
 /**
@@ -121,12 +144,11 @@ function resolve(preferred: string | null | undefined, opts: ProviderSelection):
     // one model and quietly got another is the same failure as one that
     // quietly got the mock.
     if (opts.allowMockFallback) return { kind: "mock" }
-    const [env, slot] = wouldSatisfy(preferred)
     return missing(
       `provider "${preferred}" was requested but no credential is configured: ` +
-        `set ${env} on the host or pass ${slot} with the run ` +
+        `${howToSet([preferred], opts)} ` +
         "(or set allowMockFallback to run offline on the mock)",
-      wouldSatisfy(preferred),
+      wouldSatisfy(preferred, opts),
     )
   }
 
@@ -151,10 +173,9 @@ function resolve(preferred: string | null | undefined, opts: ProviderSelection):
   }
   if (opts.allowMockFallback) return { kind: "mock" }
   return missing(
-    "no provider credential is configured: set one of " +
-      `${CLOUD.map((n) => ENV_KEY[n]).join(", ")} on the host or pass credentials with the run ` +
+    `no provider credential is configured: ${howToSet([...CLOUD], opts)} ` +
       "(or set allowMockFallback to run offline on the mock)",
-    CLOUD.flatMap(wouldSatisfy),
+    CLOUD.flatMap((n) => wouldSatisfy(n, opts)),
   )
 }
 
