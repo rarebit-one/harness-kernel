@@ -9,12 +9,16 @@ import type { RunSpec } from "./types.js"
  * reason to drop `spec.context`: it can carry material that is not on disk at
  * all (curated notes, assembled memory), which is exactly what the native loop
  * bakes into its own prompt. An empty context adds nothing, so a run without one
- * gets the prompt it always had.
+ * gets the prompt it always had. `instructions` is for a harness with no
+ * system-prompt slot of its own; absent, it adds nothing either.
  */
-export function harnessPrompt(spec: RunSpec): string {
+export function harnessPrompt(spec: RunSpec, instructions?: string): string {
   const inputs = JSON.stringify(spec.inputs ?? {}, null, 2)
   const context = spec.context?.trim() ? ["## Workspace context", spec.context, ""] : []
+  // For a harness with no system-prompt slot: instructions lead the prompt.
+  const preamble = instructions ? ["## Instructions", instructions, ""] : []
   return [
+    ...preamble,
     spec.workflow.prompt ?? `Execute the "${spec.workflow.name ?? spec.workflowPath}" workflow.`,
     "",
     "## Inputs",

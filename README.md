@@ -515,6 +515,43 @@ Behaviour that follows from this, since 0.10.0:
   an API key.
 - An ACP agent no longer falls back to the host's provider keys.
 
+### Run environment
+
+A `RunSpec` may carry an environment that every engine starts from:
+`instructions` (`system`, `agentsMd`), `agentFiles` (nested `AGENTS.md`),
+`skills` (Agent Skills directories) and `sources` (inline input files). Every
+field is optional; a spec with none of them runs exactly as before.
+
+The work is split in two. The **caller** puts the workdir half on disk, because
+it owns the tree's lifecycle: it writes before setup and restores before
+diffing, so none of it reaches the change set.
+
+```ts
+import { materializeEnvironment } from "@rarebit-one/harness-kernel"
+
+const env = await materializeEnvironment(spec) // AGENTS.md, .agents/skills/<name>/, sources
+try {
+  await runSetup()
+  await engine.run(spec, ctx)
+} finally {
+  await env.restore() // merged files back, created files gone; harness edits kept and reported
+}
+```
+
+Each **engine** compiles the rest into its own harness:
+
+| Engine | `instructions.system` | `instructions.agentsMd` | `skills` |
+|---|---|---|---|
+| native | system prompt | system prompt | index in the system prompt; files on disk |
+| claude-code | `systemPrompt` preset + `append` | `append` (Claude Code does not read `AGENTS.md`) | local plugin in a temp dir |
+| codex | `$CODEX_HOME/AGENTS.md` | the workdir `AGENTS.md` | index in `$CODEX_HOME/AGENTS.md` |
+| ACP | top of the prompt | the workdir `AGENTS.md` | index at the top of the prompt |
+
+With an environment, claude-code also loads `settingSources: ["project"]` only,
+so the workspace's `CLAUDE.md` and `.claude/` apply but the host's user
+settings do not. `src/engines/__goldens__/conformance/` pins each engine's
+compiled output for one spec.
+
 ### The kernel defines no domain tools
 
 `primitiveTools()` is strictly generic — sandboxed shell/file/HTTP access. Tools

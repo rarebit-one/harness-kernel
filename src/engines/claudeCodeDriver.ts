@@ -63,6 +63,7 @@ export async function* defaultClaudeCodeDriver(
     env: claudeCodeEnv(opts),
     ...(hasMcpServers ? { mcpServers } : {}),
     ...(allowedTools ? { allowedTools } : {}),
+    ...environmentSdkOptions(opts),
   }
 
   // The stream's last result: a stop after a clean one must not relabel a run
@@ -84,6 +85,32 @@ export async function* defaultClaudeCodeDriver(
   // map the outcome.
   const stopped = stopResult(lastResult, stop.stoppedBy())
   if (stopped) yield stopped
+}
+
+/**
+ * The SDK options a run's environment adds: an appended system prompt, the
+ * settings sources, and the skills plugin. Empty when the engine set none of
+ * them, so a run without an environment builds exactly the options it always
+ * did.
+ */
+export function environmentSdkOptions(
+  opts: Pick<ClaudeCodeOptions, "systemPromptAppend" | "settingSources" | "pluginDirs">,
+): Pick<Options, "systemPrompt" | "settingSources" | "plugins"> {
+  return {
+    ...(opts.systemPromptAppend
+      ? {
+          systemPrompt: {
+            type: "preset" as const,
+            preset: "claude_code" as const,
+            append: opts.systemPromptAppend,
+          },
+        }
+      : {}),
+    ...(opts.settingSources ? { settingSources: opts.settingSources } : {}),
+    ...(opts.pluginDirs && opts.pluginDirs.length > 0
+      ? { plugins: opts.pluginDirs.map((dir) => ({ type: "local" as const, path: dir })) }
+      : {}),
+  }
 }
 
 /** Host env the Claude Code CLI may inherit: its own and its provider's settings. */

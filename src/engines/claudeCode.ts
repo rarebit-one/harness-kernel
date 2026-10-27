@@ -7,6 +7,10 @@ import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec }
 import { defaultClaudeCodeDriver } from "./claudeCodeDriver.js"
 import { writeFileCapability, type CapabilityContext, type CapabilityTool } from "./capability.js"
 import { harnessPrompt } from "./harnessPrompt.js"
+import { environmentInstructions, hasEnvironment, writeSkills } from "./environment.js"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 
 /**
  * Driver-neutral options the engine derives from a {@link RunSpec} and hands to
@@ -34,6 +38,20 @@ export interface ClaudeCodeOptions {
   connectors?: ConnectorConfig[]
   /** The caller's cancel; the driver merges it with its own `maxDurationMs` timer. */
   signal?: AbortSignal
+  /**
+   * Appended to Claude Code's own system prompt: the run's environment
+   * instructions (and its `AGENTS.md` text, which Claude Code does not read).
+   * Set only when the run has an environment.
+   */
+  systemPromptAppend?: string
+  /**
+   * Which on-disk settings Claude Code loads. Set to `["project"]` only when
+   * the run has an environment, so the workspace's own `CLAUDE.md` and
+   * `.claude/` apply but the host's user settings do not.
+   */
+  settingSources?: Array<"user" | "project" | "local">
+  /** Local plugin directories to load: the run's skills. Outside the workdir. */
+  pluginDirs?: string[]
 }
 
 /** A normalized message from the harness (driver-agnostic). */
@@ -146,6 +164,23 @@ export class ClaudeCodeEngine implements AgentEngine {
       ...(ctx.signal ? { signal: ctx.signal } : {}),
     }
 
+    // The environment, compiled for Claude Code: instructions on its system
+    // prompt and skills as a local plugin in a transient dir OUTSIDE the
+    // sandbox, so neither can reach the change set. Nothing when the run has
+    // no environment: the options are exactly what they always were.
+    let pluginRoot: string | undefined
+    if (hasEnvironment(spec)) {
+      options.settingSources = ["project"]
+      const append = environmentInstructions(spec, { agentsMd: true, skillsIndex: false })
+      if (append) options.systemPromptAppend = append
+      if (spec.skills && spec.skills.length > 0) {
+        pluginRoot = await mkdtemp(path.join(tmpdir(), "harness-skills-"))
+        await writeSkillsPlugin(pluginRoot, spec)
+        options.pluginDirs = [pluginRoot]
+        ctx.log(`claude-code: ${spec.skills.length} skill(s) mounted as a local plugin`)
+      }
+    }
+
     ctx.log(`claude-code: driving model ${model} in ${spec.workdir}`)
 
     let finalText = ""
@@ -171,6 +206,8 @@ export class ClaudeCodeEngine implements AgentEngine {
       if (!ctx.signal?.aborted) throw err
       outcome = "canceled"
       ctx.log("claude-code: stopped (canceled)")
+    } finally {
+      if (pluginRoot) await rm(pluginRoot, { recursive: true, force: true })
     }
 
     const stopped = outcome === "canceled" || outcome === "timed_out"
@@ -183,4 +220,21 @@ export class ClaudeCodeEngine implements AgentEngine {
 
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`
+}
+
+/** The plugin the run's skills are mounted as. Brand-neutral by construction. */
+export const SKILLS_PLUGIN_NAME = "run-skills"
+
+/**
+ * A minimal local plugin holding the run's skills: a manifest plus
+ * `skills/<name>/…`, which Claude Code discovers like any plugin's skills.
+ */
+async function writeSkillsPlugin(root: string, spec: RunSpec): Promise<void> {
+  const manifestDir = path.join(root, ".claude-plugin")
+  await writeSkills(path.join(root, "skills"), spec.skills ?? [])
+  await mkdir(manifestDir, { recursive: true })
+  await writeFile(
+    path.join(manifestDir, "plugin.json"),
+    `${JSON.stringify({ name: SKILLS_PLUGIN_NAME, description: "Skills for this run" }, null, 2)}\n`,
+  )
 }

@@ -10,6 +10,7 @@ import { PrivateRunError, privateRunChannels } from "../private.js"
 import type { Tool } from "../tools/registry.js"
 import type { WorkflowDefinition } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
+import { environmentInstructions } from "./environment.js"
 
 /**
  * Builds the non-generic tools a run gets on top of the primitives, gated by the
@@ -170,7 +171,15 @@ export class NativeEngine implements AgentEngine {
         this.loop,
         {
           model,
-          system: buildSystemPrompt(spec.workflow, spec.workspaceId, spec.workflowPath),
+          system: buildSystemPrompt(
+            spec.workflow,
+            spec.workspaceId,
+            spec.workflowPath,
+            // The loop has no AGENTS.md discovery and no skills tool, so both
+            // ride in the system prompt; the skill files themselves are on
+            // disk for read_file.
+            environmentInstructions(spec, { agentsMd: true, skillsIndex: true }),
+          ),
           messages: [{ role: "user", text: buildUserPrompt(spec.workflow, context, spec.inputs) }],
           tools,
           limits: resolveLoopLimits(spec.limits),
@@ -273,12 +282,18 @@ function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Pro
   })
 }
 
+/**
+ * The loop's system prompt. `instructions` (the run's environment, when it has
+ * one) goes last, after the kernel's own framing, so a run without one gets
+ * exactly the prompt it always had.
+ */
 function buildSystemPrompt(
   workflow: WorkflowDefinition,
   workspaceId: string,
   workflowPath: string,
+  instructions?: string,
 ): string {
-  return [
+  const base = [
     "You are an autonomous workflow executing in an isolated workspace sandbox.",
     `Workspace: ${workspaceId}`,
     `Workflow: ${workflow.name ?? workflowPath}`,
@@ -288,6 +303,7 @@ function buildSystemPrompt(
     "than doing it yourself. When finished, reply with the workflow's output as",
     "Markdown and no further tool calls.",
   ].join("\n")
+  return instructions ? `${base}\n\n${instructions}` : base
 }
 
 function buildUserPrompt(

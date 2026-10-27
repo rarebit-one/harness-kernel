@@ -1,6 +1,6 @@
 import { refusePrivateRun } from "../private.js"
 import { refuseUnisolated } from "./isolation.js"
-import { mkdtemp, rm, stat } from "node:fs/promises"
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import type { RunOutcome } from "../events.js"
@@ -11,6 +11,7 @@ import { connectorServers, writeCodexConfig, type SerializableMcpServer } from "
 import { readEmissions } from "./capabilityEmissions.js"
 import { defaultCodexDriver } from "./codexDriver.js"
 import { harnessPrompt } from "./harnessPrompt.js"
+import { environmentInstructions } from "./environment.js"
 
 /**
  * Driver-neutral options the engine derives from a {@link RunSpec} and hands to
@@ -157,6 +158,16 @@ export class CodexEngine implements AgentEngine {
       },
     }
     await writeCodexConfig(codexHome, servers)
+    // The environment, compiled for codex. Codex reads the workdir's own
+    // AGENTS.md (the caller materialized the environment's into it) and also
+    // `$CODEX_HOME/AGENTS.md` as global instructions, which is where the
+    // system instructions and the skills index go. Not written when there is
+    // nothing to say, so a run without an environment gets the same CODEX_HOME.
+    const instructions = environmentInstructions(spec, { agentsMd: false, skillsIndex: true })
+    if (instructions) {
+      await writeFile(path.join(codexHome, "AGENTS.md"), `${instructions}\n`)
+      ctx.log("codex: environment instructions written to CODEX_HOME/AGENTS.md")
+    }
 
     const options: CodexOptions = {
       prompt: harnessPrompt(spec),

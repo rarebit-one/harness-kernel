@@ -1,0 +1,37 @@
+=== options
+{
+  "prompt": "Do the thing.\n\n## Inputs\n```json\n{\n  \"quarter\": \"Q3\"\n}\n```\n\nYou are running as an autonomous workflow. The current working directory is the\nworkspace — inspect and edit its files directly with your tools. When finished,\nreply with the workflow's output as Markdown.",
+  "cwd": "<workdir>",
+  "model": "claude-opus-4-8",
+  "settingSources": [
+    "project"
+  ],
+  "systemPromptAppend": "You are the finance team's analyst. Never email anyone.\n\n# Conventions\n\nCurrency is SGD unless stated.\n\n## Instructions for `campaigns/`\nThese apply when working in `campaigns/` and below.\n\nCampaign briefs live here.",
+  "pluginDirs": [
+    "<tmp>"
+  ],
+  "mcpTools": [
+    "write_file"
+  ]
+}
+=== sdk options from the environment
+{
+  "systemPrompt": {
+    "type": "preset",
+    "preset": "claude_code",
+    "append": "You are the finance team's analyst. Never email anyone.\n\n# Conventions\n\nCurrency is SGD unless stated.\n\n## Instructions for `campaigns/`\nThese apply when working in `campaigns/` and below.\n\nCampaign briefs live here."
+  },
+  "settingSources": [
+    "project"
+  ],
+  "plugins": [
+    {
+      "type": "local",
+      "path": "<tmp>"
+    }
+  ]
+}
+=== plugin
+.claude-plugin/plugin.json  67B
+skills/csv-report/SKILL.md  96B
+skills/csv-report/scripts/report.py  16B

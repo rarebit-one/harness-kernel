@@ -4,6 +4,7 @@ import type { ProviderOptions } from "../providers/options.js"
 import type { FinishReason } from "../providers/types.js"
 import type { ConnectorConfig, Permissions, WorkflowDefinition } from "../types.js"
 import type { Isolation } from "./isolation.js"
+import type { EnvironmentFile, RunInstructions, RunSkill, RunSource } from "./environment.js"
 
 /**
  * The provider-neutral, harness-neutral description of one workflow run, handed
@@ -69,6 +70,28 @@ export interface RunSpec {
    * nothing. The returned `EngineResult.text` is still the caller's to place.
    */
   private?: boolean
+  /**
+   * Instructions on top of the harness's own defaults (see `environment.ts`).
+   * `system` reaches every engine through its system-prompt slot or nearest
+   * equivalent; `agentsMd` is the workdir root's `AGENTS.md`, which the caller
+   * materializes and an engine whose harness does not read `AGENTS.md` also
+   * puts in its prompt. Absent changes nothing.
+   */
+  instructions?: RunInstructions
+  /** Nested `AGENTS.md` files, materialized by the caller. Absent changes nothing. */
+  agentFiles?: EnvironmentFile[]
+  /**
+   * Agent Skills, materialized by the caller under `.agents/skills/<name>/`.
+   * Claude Code also gets them as a local plugin; every other engine is told
+   * where they are. Absent changes nothing.
+   */
+  skills?: RunSkill[]
+  /**
+   * Run inputs that are not workspace content (inline files today), written by
+   * the caller before setup and removed before the change set is computed.
+   * Absent changes nothing.
+   */
+  sources?: RunSource[]
 }
 
 export interface EngineContext {

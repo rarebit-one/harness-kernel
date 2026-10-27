@@ -243,6 +243,18 @@ export { ClaudeCodeEngine } from "./engines/claudeCode.js"
 export type { ClaudeCodeOptions, ClaudeCodeDriver } from "./engines/claudeCode.js"
 export { CodexEngine } from "./engines/codex.js"
 export type { CodexOptions, CodexDriver } from "./engines/codex.js"
+// The run's environment (instructions, instruction files, skills, inline
+// sources): the caller materializes the workdir half; each engine compiles the
+// rest into its own harness's configuration.
+export { materializeEnvironment, hasEnvironment, SKILLS_DIR } from "./engines/environment.js"
+export type {
+  EnvironmentFile,
+  MaterializedEnvironment,
+  RestoreReport,
+  RunInstructions,
+  RunSkill,
+  RunSource,
+} from "./engines/environment.js"
 
 // The capability mechanism. The kernel supplies the workspace-scope guards, the
 // one capability with no product semantics (write_file), and the two transports
