@@ -470,8 +470,8 @@ endpoint — set `LOCAL_MODEL_BASE_URL` (required), and optionally `LOCAL_MODEL`
 and `LOCAL_MODEL_API_KEY` (a local server usually needs none; when absent no
 `Authorization` header is sent). Unlike the others, `local` **fails loud** when
 no base URL is configured rather than degrading to the mock — it is chosen to
-keep a run on private inference (e.g. jumpdrive-web's `data_class: pii`, which
-forces a run onto the org's designated model), so silently running it elsewhere
+keep a run on private inference (e.g. an application that forces sensitive-data
+runs onto a designated model), so silently running it elsewhere
 would defeat the point.
 
 ### Engines
