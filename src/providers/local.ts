@@ -13,8 +13,8 @@ export const LOCAL_DEFAULT_MODEL = "local"
  * base URL (llama-server, LM Studio, vLLM, Ollama's OpenAI endpoint, …).
  *
  * It exists so a run that must stay on private inference has a provider to
- * actually run on: jumpdrive-web#654 forces a `data_class: pii` workflow onto the
- * org's designated model, and this is what that model can point at.
+ * actually run on: an application can force sensitive-data runs onto a
+ * designated model, and this is what that model can point at.
  *
  * The API key is OPTIONAL — a local server typically needs none. When it is
  * absent the Authorization header is omitted entirely (rather than sent as an
