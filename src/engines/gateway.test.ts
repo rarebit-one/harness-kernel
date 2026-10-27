@@ -92,6 +92,9 @@ function expectNoLeak(env: Record<string, string>) {
 describe("gateway routes", () => {
   it("defaults each provider to <baseUrl>/p/<provider>, and honours an override", () => {
     expect(gatewayRoute(GATEWAY, "anthropic")).toBe("https://gw.example.com/p/anthropic")
+    expect(gatewayRoute({ ...GATEWAY, baseUrl: "https://gw.example.com///" }, "openai")).toBe(
+      "https://gw.example.com/p/openai",
+    )
     expect(
       gatewayRoute({ ...GATEWAY, routes: { openai: "https://other.example.com/oai" } }, "openai"),
     ).toBe("https://other.example.com/oai")

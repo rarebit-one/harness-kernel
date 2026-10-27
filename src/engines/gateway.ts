@@ -43,7 +43,14 @@ export const GATEWAY_SHADOWED_PREFIXES = ["ANTHROPIC_", "OPENAI_", "OPENROUTER_"
 
 /** The base URL a provider is reached through. */
 export function gatewayRoute(gateway: RunGateway, provider: GatewayProvider): string {
-  return gateway.routes?.[provider] ?? `${gateway.baseUrl.replace(/\/+$/, "")}/p/${provider}`
+  return gateway.routes?.[provider] ?? `${withoutTrailingSlashes(gateway.baseUrl)}/p/${provider}`
+}
+
+// A loop, not `/\/+$/`: that regex backtracks polynomially on a run of slashes.
+function withoutTrailingSlashes(url: string): string {
+  let end = url.length
+  while (end > 0 && url[end - 1] === "/") end--
+  return url.slice(0, end)
 }
 
 /**
