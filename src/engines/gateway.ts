@@ -70,9 +70,16 @@ export function gatewayEnv(
   return env
 }
 
-/** Drop the prefixes a gateway shadows from a harness's inherit list. */
+/**
+ * Drop the prefixes a gateway shadows from a harness's inherit list. A prefix
+ * overlapping one in either direction goes: `"ANTHROPIC_BASE"` sits inside a
+ * shadowed prefix, and a broader `"ANTHROPIC"` or `"A"` would match every
+ * shadowed var (and the host's `ANTHROPIC_CUSTOM_HEADERS`) just as well.
+ */
 export function withoutShadowed(prefixes: readonly string[]): string[] {
-  return prefixes.filter((p) => !GATEWAY_SHADOWED_PREFIXES.some((s) => p.startsWith(s)))
+  return prefixes.filter(
+    (p) => !GATEWAY_SHADOWED_PREFIXES.some((s) => p.startsWith(s) || s.startsWith(p)),
+  )
 }
 
 /**

@@ -17,6 +17,7 @@ import {
   gatewayProblem,
   gatewayRoute,
   refuseRawCredentialsInVm,
+  withoutShadowed,
   type RunGateway,
 } from "./gateway.js"
 import { NativeEngine, providerSelection } from "./native.js"
@@ -88,6 +89,14 @@ function expectNoLeak(env: Record<string, string>) {
   expect(dump).not.toContain("LEAK")
   expect(dump).toContain(GATEWAY.runToken)
 }
+
+describe("withoutShadowed", () => {
+  it("drops prefixes inside or around a shadowed one, keeping the rest", () => {
+    expect(
+      withoutShadowed(["ANTHROPIC", "ANTHROPIC_BASE", "OPENAI_", "OPEN", "A", "", "HOME", "XDG_"]),
+    ).toEqual(["HOME", "XDG_"])
+  })
+})
 
 describe("gateway routes", () => {
   it("defaults each provider to <baseUrl>/p/<provider>, and honours an override", () => {
@@ -301,6 +310,36 @@ describe("native engine through a gateway", () => {
     expect(selection.credentials?.local).toBe("lk")
   })
 
+  it("pins an unset preference to the provider the run would resolve without the gateway", () => {
+    const noHostKeys = { ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", OPENROUTER_API_KEY: "" }
+    const openaiOnly = spec("/sandbox", {
+      gateway: GATEWAY,
+      provider: { credentials: { openai: "sk-oai-LEAK-byo" } },
+    })
+    expect(providerSelection(openaiOnly, noHostKeys).preferred).toBe("openai")
+    const hostOpenRouter = spec("/sandbox", { gateway: GATEWAY, provider: {} })
+    expect(
+      providerSelection(hostOpenRouter, { ...noHostKeys, OPENROUTER_API_KEY: "sk-or-LEAK-host" })
+        .preferred,
+    ).toBe("openrouter")
+    const explicit = spec("/sandbox", {
+      gateway: GATEWAY,
+      provider: { preferred: "openrouter", credentials: { openai: "sk-oai-LEAK-byo" } },
+    })
+    expect(providerSelection(explicit, noHostKeys).preferred).toBe("openrouter")
+  })
+
+  it("hands out no run token when nothing would resolve, so the run still fails loud", async () => {
+    const keyless = spec("/sandbox", { gateway: GATEWAY, provider: {} })
+    const selection = providerSelection(keyless, {})
+    expect(selection.credentials).toEqual({})
+    await withEnv({ ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", OPENROUTER_API_KEY: "" }, () => {
+      const support = new NativeEngine().supports(keyless)
+      expect(support.ok).toBe(false)
+      expect(!support.ok && support.reason).toMatch(/no provider credential is configured/)
+    })
+  })
+
   it("is the plain selection without a gateway", () => {
     const s = spec("/sandbox")
     expect(providerSelection(s)).toBe(s.provider)
@@ -347,6 +386,26 @@ describe("native engine through a gateway", () => {
 // the reviewer's repro, which asserted nothing and printed `{"ok":true}`.
 describe("review regressions: vm credential refusals", () => {
   const vmFlags = { RUNNER_ENABLE_CLAUDE_CODE: "1", RUNNER_ISOLATION: "vm" }
+
+  it("native refuses a vm run whose host holds the local provider's key", async () => {
+    await withEnv(
+      {
+        LOCAL_MODEL_BASE_URL: "http://127.0.0.1:11434/v1",
+        LOCAL_MODEL_API_KEY: "lk-LEAK-host",
+        ANTHROPIC_API_KEY: "",
+        OPENAI_API_KEY: "",
+        OPENROUTER_API_KEY: "",
+      },
+      () => {
+        const refused = new NativeEngine().supports(
+          spec("/tmp", { isolation: "vm", provider: { preferred: "local" } }),
+        )
+        expect(refused.ok).toBe(false)
+        expect(!refused.ok && refused.reason).toContain("host LOCAL_MODEL_API_KEY")
+        expect(!refused.ok && refused.reason).not.toContain("LEAK")
+      },
+    )
+  })
 
   it("F5: a private native vm run with a raw cloud key is refused like any other", async () => {
     await withEnv({ LOCAL_MODEL_BASE_URL: "http://127.0.0.1:11434/v1" }, () => {
