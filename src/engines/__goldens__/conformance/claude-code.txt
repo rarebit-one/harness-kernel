@@ -6,7 +6,7 @@
   "settingSources": [
     "project"
   ],
-  "systemPromptAppend": "You are the finance team's analyst. Never email anyone.\n\n# Conventions\n\nCurrency is SGD unless stated.",
+  "systemPromptAppend": "You are the finance team's analyst. Never email anyone.\n\n# Conventions\n\nCurrency is SGD unless stated.\n\n## Instructions for `campaigns/`\nThese apply when working in `campaigns/` and below.\n\nCampaign briefs live here.",
   "pluginDirs": [
     "<tmp>"
   ],
@@ -19,7 +19,7 @@
   "systemPrompt": {
     "type": "preset",
     "preset": "claude_code",
-    "append": "You are the finance team's analyst. Never email anyone.\n\n# Conventions\n\nCurrency is SGD unless stated."
+    "append": "You are the finance team's analyst. Never email anyone.\n\n# Conventions\n\nCurrency is SGD unless stated.\n\n## Instructions for `campaigns/`\nThese apply when working in `campaigns/` and below.\n\nCampaign briefs live here."
   },
   "settingSources": [
     "project"

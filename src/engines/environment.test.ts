@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -213,6 +213,28 @@ describe("materializeEnvironment", () => {
     }
   })
 
+  it("restores nothing through a symlink the harness swapped in, and reports it", async () => {
+    const outside = await mkdtemp(path.join(tmpdir(), "env-outside-"))
+    try {
+      await writeFile(path.join(workdir, "campaigns/AGENTS.md"), "local\n")
+      const env = await materializeEnvironment({
+        workdir,
+        agentFiles: [{ path: "campaigns/AGENTS.md", content: "ENV" }],
+      })
+      const merged = await readFile(path.join(workdir, "campaigns/AGENTS.md"))
+      // The harness replaces the parent directory with a link to an outside
+      // directory holding a file that starts with the same block.
+      await rename(path.join(workdir, "campaigns"), path.join(workdir, "moved"))
+      await symlink(outside, path.join(workdir, "campaigns"))
+      await writeFile(path.join(outside, "AGENTS.md"), merged)
+
+      expect(await env.restore()).toEqual({ kept: ["campaigns/AGENTS.md"] })
+      expect(await readFile(path.join(outside, "AGENTS.md"))).toEqual(merged)
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
   it("undoes the files it had written when a later write fails", async () => {
     // Passes planning, fails at write time: the target is a directory.
     await mkdir(path.join(workdir, "data/rates.csv"), { recursive: true })
@@ -291,6 +313,19 @@ describe("environment helpers", () => {
       "SYS\n\nAGENTS",
     )
     expect(environmentInstructions({}, { agentsMd: true, skillsIndex: true })).toBeUndefined()
+  })
+
+  it("inlines nested agent files, scoped to their directory, for a harness without discovery", () => {
+    const spec = { agentFiles: [{ path: "campaigns/AGENTS.md", content: "Cite sources.\n" }] }
+    expect(environmentInstructions(spec, { agentsMd: true, skillsIndex: false })).toBe(
+      [
+        "## Instructions for `campaigns/`",
+        "These apply when working in `campaigns/` and below.",
+        "",
+        "Cite sources.",
+      ].join("\n"),
+    )
+    expect(environmentInstructions(spec, { agentsMd: false, skillsIndex: false })).toBeUndefined()
     expect(
       environmentInstructions(
         { instructions: { system: "  " } },
