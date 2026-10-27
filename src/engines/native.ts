@@ -11,6 +11,12 @@ import type { Tool } from "../tools/registry.js"
 import type { WorkflowDefinition } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { environmentInstructions } from "./environment.js"
+import {
+  GATEWAY_PROVIDERS,
+  gatewayRoute,
+  refuseBadGateway,
+  refuseCredentialsInVm,
+} from "./gateway.js"
 
 /**
  * Builds the non-generic tools a run gets on top of the primitives, gated by the
@@ -75,8 +81,15 @@ export class NativeEngine implements AgentEngine {
    */
   supports(spec?: RunSpec): EngineSupport {
     if (!spec) return { ok: true }
+    // Before the private branch: a private run is held to local inference, but
+    // a vm run must still carry no raw or exposed credentials, and a
+    // malformed gateway is refused whatever the run is.
+    const refusal =
+      refuseBadGateway("native", spec) ?? refuseCredentialsInVm("native", spec, HOST_MODEL_KEYS)
+    if (refusal) return refusal
     if (spec.private) return privateProviderSupport(spec)
-    return providerAvailability(spec.provider.preferred, spec.provider)
+    const selection = providerSelection(spec)
+    return providerAvailability(selection.preferred, selection)
   }
 
   async run(spec: RunSpec, ctx: EngineContext): Promise<EngineResult> {
@@ -121,7 +134,8 @@ export class NativeEngine implements AgentEngine {
     // The whole selection, not a hand-picked subset: `supports()` judged the
     // run on `spec.provider` (including `allowMockFallback`), so `run()` must
     // resolve it from the same object or the two can disagree.
-    const provider = selectProvider(spec.provider.preferred, spec.provider)
+    const selection = providerSelection(spec)
+    const provider = selectProvider(selection.preferred, selection)
     // Belt and braces for the private path: whatever selection did, a private
     // run proceeds on the local provider or not at all.
     if (spec.private && provider.name !== "local") {
@@ -230,6 +244,63 @@ export class NativeEngine implements AgentEngine {
     )
     const assembled = renderContext(fragments)
     return spec.context ? `${spec.context}\n\n${assembled}` : assembled
+  }
+}
+
+/** The host env keys the cloud adapters fall back to, in `selectProvider`'s order. */
+const CLOUD_ENV_KEYS = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+} as const
+
+/**
+ * Every host env key a native run can end up holding: the cloud fallbacks and
+ * the local provider's optional key, which `selectProvider` also reads.
+ */
+const HOST_MODEL_KEYS = [...Object.values(CLOUD_ENV_KEYS), "LOCAL_MODEL_API_KEY"] as const
+
+/**
+ * The provider selection the run resolves against. With a gateway, every
+ * cloud adapter is pointed at its gateway route and keyed with the run token,
+ * replacing the run's BYO keys — and, because a key is now always present, the
+ * host's env keys are never reached either. The `local` provider is not
+ * routed: private inference never leaves the host anyway.
+ *
+ * Because the run token keys every cloud adapter, a run with no preference
+ * would always resolve to the first one in order. So the preference is pinned
+ * to the provider the run would have resolved without the gateway (its BYO
+ * key, else the host's), keeping an OpenAI-only run on OpenAI. When none
+ * would resolve, the run token is not handed out, and the selection fails
+ * exactly as it would have without the gateway.
+ */
+export function providerSelection(
+  spec: RunSpec,
+  env: NodeJS.ProcessEnv = process.env,
+): RunSpec["provider"] {
+  const gateway = spec.gateway
+  if (!gateway) return spec.provider
+  const baseURLs = Object.fromEntries(GATEWAY_PROVIDERS.map((p) => [p, gatewayRoute(gateway, p)]))
+  const local = spec.provider.credentials?.local
+  const localOnly = local !== undefined ? { local } : {}
+
+  let preferred = spec.provider.preferred
+  if (typeof preferred !== "string" || preferred.trim() === "") {
+    const configured = GATEWAY_PROVIDERS.find(
+      (p) => spec.provider.credentials?.[p] ?? env[CLOUD_ENV_KEYS[p]],
+    )
+    // Nothing would resolve, so every cloud slot is absent or deliberately
+    // empty; keep them as sent, since an empty slot is what stops the host key.
+    if (!configured) return { ...spec.provider, baseURLs }
+    preferred = configured
+  }
+
+  const token = gateway.runToken
+  return {
+    ...spec.provider,
+    preferred,
+    credentials: { anthropic: token, openai: token, openrouter: token, ...localOnly },
+    baseURLs,
   }
 }
 

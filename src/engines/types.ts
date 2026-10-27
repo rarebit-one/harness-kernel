@@ -5,6 +5,7 @@ import type { FinishReason } from "../providers/types.js"
 import type { ConnectorConfig, Permissions, WorkflowDefinition } from "../types.js"
 import type { Isolation } from "./isolation.js"
 import type { EnvironmentFile, RunInstructions, RunSkill, RunSource } from "./environment.js"
+import type { RunGateway } from "./gateway.js"
 
 /**
  * The provider-neutral, harness-neutral description of one workflow run, handed
@@ -92,6 +93,23 @@ export interface RunSpec {
    * Absent changes nothing.
    */
   sources?: RunSource[]
+  /**
+   * A credential gateway for the run's model calls (see `gateway.ts`). When
+   * present, every engine reaches its provider through the gateway's route
+   * with `runToken` as the key, and no raw credential — `provider.credentials`
+   * or the host's env keys — reaches a harness. A malformed gateway is
+   * refused in `supports()`, never ignored. Absent changes nothing, except
+   * that a `vm` run holding raw credentials is refused.
+   */
+  gateway?: RunGateway
+  /**
+   * Whether a `vm` run may hold exposed credentials — `secrets`, or a
+   * connector credential the harness carries itself — which reach the guest
+   * in the clear because no gateway can inject them. Absent (or anything but
+   * `"allowed"`) refuses such a run; only the caller's policy should set it,
+   * never a workflow author. Ignored below `vm`.
+   */
+  exposedCredentials?: "allowed" | "refused"
 }
 
 export interface EngineContext {

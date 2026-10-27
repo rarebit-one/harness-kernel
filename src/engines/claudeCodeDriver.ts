@@ -4,6 +4,7 @@ import type { ClaudeCodeMessage, ClaudeCodeOptions } from "./claudeCode.js"
 import { CAPABILITY_SERVER_NAME, capabilitySdkServer, capabilityToolIds } from "./capabilityMcp.js"
 import { connectorServers } from "./connectorMcp.js"
 import { childEnv } from "./isolation.js"
+import { withoutShadowed } from "./gateway.js"
 
 /**
  * The default Claude Code driver: runs the Anthropic Agent SDK's `query()` (which
@@ -124,9 +125,14 @@ const CLAUDE_ENV_PREFIXES = ["ANTHROPIC_", "CLAUDE_"] as const
  * through this engine.
  */
 export function claudeCodeEnv(
-  opts: Pick<ClaudeCodeOptions, "apiKey">,
+  opts: Pick<ClaudeCodeOptions, "apiKey" | "gatewayEnv">,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
+  // Through a gateway: the run token and route only. Even a stray `apiKey`
+  // is dropped, and the host's ANTHROPIC_* settings are not inherited.
+  if (opts.gatewayEnv) {
+    return childEnv(withoutShadowed(CLAUDE_ENV_PREFIXES), opts.gatewayEnv, env)
+  }
   return childEnv(CLAUDE_ENV_PREFIXES, opts.apiKey ? { ANTHROPIC_API_KEY: opts.apiKey } : {}, env)
 }
 

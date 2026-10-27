@@ -247,6 +247,8 @@ export type { CodexOptions, CodexDriver } from "./engines/codex.js"
 // sources): the caller materializes the workdir half; each engine compiles the
 // rest into its own harness's configuration.
 export { materializeEnvironment, hasEnvironment, SKILLS_DIR } from "./engines/environment.js"
+// A credential gateway: the run holds a run token, never a provider key.
+export type { RunGateway, GatewayProvider } from "./engines/gateway.js"
 export type {
   EnvironmentFile,
   MaterializedEnvironment,

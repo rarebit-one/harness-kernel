@@ -14,6 +14,12 @@ export interface ProviderSelection {
   /** Per-org provider API keys; each falls back to the runner's env key when absent. */
   credentials?: { anthropic?: string; openai?: string; openrouter?: string; local?: string }
   /**
+   * Per-provider base URLs, overriding each adapter's default endpoint — how
+   * a run is pointed at a credential gateway or proxy. Absent leaves every
+   * adapter on its default.
+   */
+  baseURLs?: { anthropic?: string; openai?: string; openrouter?: string }
+  /**
    * Run on the offline mock when no credential resolves, instead of failing.
    * Off by default: a run that silently lands on the mock looks exactly like a
    * run that reached a model, and nothing on the wire tells them apart. Set it
@@ -189,11 +195,11 @@ export function selectProvider(preferred?: string | null, opts: ProviderSelectio
     case "cloud":
       switch (resolution.name) {
         case "anthropic":
-          return new AnthropicProvider(resolution.key, model)
+          return new AnthropicProvider(resolution.key, model, opts.baseURLs?.anthropic)
         case "openai":
-          return new OpenAIProvider(resolution.key, model)
+          return new OpenAIProvider(resolution.key, model, opts.baseURLs?.openai)
         case "openrouter":
-          return new OpenRouterProvider(resolution.key, model)
+          return new OpenRouterProvider(resolution.key, model, {}, opts.baseURLs?.openrouter)
       }
     // eslint-disable-next-line no-fallthrough -- the inner switch is exhaustive
     case "local":

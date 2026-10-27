@@ -227,7 +227,12 @@ export class AnthropicProvider implements Provider {
   readonly model: string
   private client: Anthropic
 
-  constructor(apiKey: string, model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6") {
+  constructor(
+    apiKey: string,
+    model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6",
+    /** Where requests go instead of the SDK's default (a credential gateway, a proxy). */
+    baseURL?: string,
+  ) {
     // The SDK retries transient 429/5xx/network errors with exponential backoff
     // internally, so a blip doesn't fail the whole run; `timeout` bounds each
     // request. Both are env-overridable.
@@ -235,6 +240,7 @@ export class AnthropicProvider implements Provider {
       apiKey,
       timeout: providerTimeoutMs(),
       maxRetries: providerMaxRetries(),
+      ...(baseURL !== undefined ? { baseURL } : {}),
     })
     this.model = model
   }

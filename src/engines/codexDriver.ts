@@ -6,15 +6,25 @@ import { DEFAULT_STOP_GRACE_MS, terminateProcessGroup } from "../processGroup.js
 import { runStop } from "../signals.js"
 import type { CodexMessage, CodexOptions } from "./codex.js"
 import { childEnv } from "./isolation.js"
+import { withoutShadowed } from "./gateway.js"
 
 /** Host env the codex CLI may inherit: its own and its provider's settings. */
 const CODEX_ENV_PREFIXES = ["OPENAI_", "CODEX_"] as const
 
 /** The codex process environment: an allowlist, never the host's whole one (see `childEnv`). */
 export function codexEnv(
-  opts: Pick<CodexOptions, "codexHome" | "capabilityEnv" | "apiKey">,
+  opts: Pick<CodexOptions, "codexHome" | "capabilityEnv" | "apiKey" | "gatewayEnv">,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
+  // Through a gateway: the run token and route only, never a key, and none of
+  // the host's OPENAI_* settings.
+  if (opts.gatewayEnv) {
+    return childEnv(
+      withoutShadowed(CODEX_ENV_PREFIXES),
+      { CODEX_HOME: opts.codexHome, ...opts.capabilityEnv, ...opts.gatewayEnv },
+      env,
+    )
+  }
   return childEnv(
     CODEX_ENV_PREFIXES,
     {
