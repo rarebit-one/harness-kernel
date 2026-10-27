@@ -1,4 +1,5 @@
-import { lstat, mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises"
+import { constants } from "node:fs"
+import { lstat, mkdir, open, readFile, rm, rmdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { resolveWithin } from "./capability.js"
 import type { RunSpec } from "./types.js"
@@ -249,10 +250,27 @@ async function assertNoSymlink(workdir: string, rel: string): Promise<void> {
 }
 
 async function readExisting(abs: string, rel: string): Promise<Buffer | undefined> {
-  const st = await lstat(abs).catch(() => undefined)
-  if (!st) return undefined
-  if (!st.isFile()) throw new Error(`environment path is not a regular file: ${rel}`)
-  return readFile(abs)
+  // Open once without following a final symlink, then stat and read the same
+  // handle, so the file checked is the file read.
+  let handle
+  try {
+    handle = await open(abs, constants.O_RDONLY | constants.O_NOFOLLOW)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === "ENOENT") return undefined
+    if (code === "ELOOP") {
+      throw new Error(`environment path is not a regular file: ${rel}`, { cause: err })
+    }
+    throw err
+  }
+  try {
+    if (!(await handle.stat()).isFile()) {
+      throw new Error(`environment path is not a regular file: ${rel}`)
+    }
+    return await handle.readFile()
+  } finally {
+    await handle.close()
+  }
 }
 
 /** `mkdir -p`, returning the directories it created (shallowest first). */
@@ -340,9 +358,15 @@ export function frontmatterField(markdown: string, field: string): string | unde
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(markdown)
   if (!match) return undefined
   for (const line of match[1]!.split(/\r?\n/)) {
-    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line)
-    if (!kv || kv[1] !== field) continue
-    const value = kv[2]!.trim().replace(/^(["'])(.*)\1$/, "$2")
+    // Split at the first colon rather than with one regex: `key:\s*(.*)` backtracks
+    // polynomially on a long run of spaces.
+    const colon = line.indexOf(":")
+    if (colon <= 0 || line.slice(0, colon) !== field) continue
+    if (!/^[A-Za-z0-9_-]+$/.test(field)) continue
+    const value = line
+      .slice(colon + 1)
+      .trim()
+      .replace(/^(["'])(.*)\1$/, "$2")
     // A block scalar (`>` / `|`) spans lines this reader does not parse.
     return value === "" || value === ">" || value === "|" ? undefined : value
   }

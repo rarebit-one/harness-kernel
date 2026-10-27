@@ -66,11 +66,13 @@ function spec(workdir: string, overrides: Partial<RunSpec> = {}): RunSpec {
 
 const ctx = { log: () => {} }
 
-/** Replace per-run temp paths so a golden is stable across machines and runs. */
+/** Replace per-run temp paths and the node binary so a golden is stable across machines and runs. */
 function stable(text: string, workdir: string): string {
   return text
     .split(workdir)
     .join("<workdir>")
+    .split(process.execPath)
+    .join("<node>")
     .replace(/[^\s"']*harness-[a-z-]+-[A-Za-z0-9]+/g, "<tmp>")
 }
 
@@ -139,10 +141,13 @@ const compileCodex: Compile = async (s) => {
   let seen: CodexOptions | undefined
   let home: string[] = []
   let agents = ""
+  let config = ""
   async function* driver(opts: CodexOptions): AsyncIterable<CodexMessage> {
     seen = opts
-    home = await listing(opts.codexHome)
+    // Names only: config.toml holds machine paths, so its size varies; its content is below.
+    home = (await listing(opts.codexHome)).map((line) => line.replace(/ {2}\d+B$/, ""))
     agents = await readFile(path.join(opts.codexHome, "AGENTS.md"), "utf8").catch(() => "(none)")
+    config = await readFile(path.join(opts.codexHome, "config.toml"), "utf8").catch(() => "(none)")
     yield { kind: "result", text: "ok", isError: false }
   }
   await new CodexEngine(driver, SCRIPT).run(s, ctx)
@@ -153,6 +158,8 @@ const compileCodex: Compile = async (s) => {
     ...home,
     "=== CODEX_HOME/AGENTS.md",
     agents,
+    "=== CODEX_HOME/config.toml",
+    config,
   ].join("\n")
 }
 
