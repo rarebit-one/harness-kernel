@@ -35,9 +35,9 @@ const PROVIDER_ENV: Record<GatewayProvider, { baseUrl: string; key: string }> = 
 
 /**
  * Host env prefixes a harness must NOT inherit while a gateway is in use: a
- * host `ANTHROPIC_BASE_URL` would route around the gateway, and a header or
- * config var under these prefixes can carry a credential whose name the
- * deny-list cannot spot (`ANTHROPIC_CUSTOM_HEADERS`).
+ * host `ANTHROPIC_BASE_URL` would route around the gateway, and a config var
+ * under these prefixes can carry a credential whose name the deny-list cannot
+ * spot.
  */
 export const GATEWAY_SHADOWED_PREFIXES = ["ANTHROPIC_", "OPENAI_", "OPENROUTER_"] as const
 
