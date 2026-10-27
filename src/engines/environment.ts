@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { lstat, mkdir, open, readFile, rm, rmdir, writeFile } from "node:fs/promises"
+import { lstat, mkdir, open, rm, rmdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { resolveWithin } from "./capability.js"
 import type { RunSpec } from "./types.js"
@@ -154,12 +154,12 @@ export async function materializeEnvironment(
     }
   } catch (err) {
     // Half an environment is worse than none: undo what was written.
-    await undo(applied, createdDirs)
+    await undo(spec.workdir, applied, createdDirs)
     throw err
   }
   return {
     paths: applied.map((a) => a.rel),
-    restore: () => undo(applied, createdDirs),
+    restore: () => undo(spec.workdir, applied, createdDirs),
   }
 }
 
@@ -290,10 +290,24 @@ async function mkdirTracked(workdir: string, dir: string): Promise<string[]> {
   return created
 }
 
-async function undo(applied: Applied[], createdDirs: string[]): Promise<RestoreReport> {
+async function undo(
+  workdir: string,
+  applied: Applied[],
+  createdDirs: string[],
+): Promise<RestoreReport> {
   const kept: string[] = []
   for (const entry of [...applied].reverse()) {
-    const current = await readFile(entry.abs).catch(() => undefined)
+    // The harness may have swapped the file or a parent for a symlink since we
+    // wrote it. Never follow one out of the workdir: leave it and report it.
+    const safe = await assertNoSymlink(workdir, entry.rel).then(
+      () => true,
+      () => false,
+    )
+    if (!safe) {
+      kept.push(entry.rel)
+      continue
+    }
+    const current = await readExisting(entry.abs, entry.rel).catch(() => undefined)
     if (current === undefined) continue
     if (entry.kind === "created") {
       if (current.equals(entry.content)) await rm(entry.abs, { force: true })
@@ -381,13 +395,30 @@ export function frontmatterField(markdown: string, field: string): string | unde
  * spec without an environment adds nothing.
  */
 export function environmentInstructions(
-  spec: Pick<RunSpec, "instructions" | "skills">,
+  spec: Pick<RunSpec, "instructions" | "agentFiles" | "skills">,
   include: { agentsMd: boolean; skillsIndex: boolean },
 ): string | undefined {
   const parts = [
     spec.instructions?.system,
     include.agentsMd ? spec.instructions?.agentsMd : undefined,
+    ...(include.agentsMd ? scopedAgentFiles(spec.agentFiles) : []),
     include.skillsIndex ? skillsIndex(spec.skills) : undefined,
   ].filter((p): p is string => typeof p === "string" && p.trim() !== "")
   return parts.length > 0 ? parts.join("\n\n") : undefined
+}
+
+/**
+ * Nested `AGENTS.md` files, inlined for a harness that does not discover them,
+ * each headed by the directory it governs.
+ */
+function scopedAgentFiles(files: EnvironmentFile[] | undefined): string[] {
+  return (files ?? []).map((file) => {
+    const dir = path.posix.dirname(normalizeRel(file.path))
+    return [
+      `## Instructions for \`${dir}/\``,
+      `These apply when working in \`${dir}/\` and below.`,
+      "",
+      decode(file, file.path).toString().trim(),
+    ].join("\n")
+  })
 }

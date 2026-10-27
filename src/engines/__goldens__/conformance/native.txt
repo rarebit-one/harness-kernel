@@ -14,6 +14,11 @@ You are the finance team's analyst. Never email anyone.
 
 Currency is SGD unless stated.
 
+## Instructions for `campaigns/`
+These apply when working in `campaigns/` and below.
+
+Campaign briefs live here.
+
 ## Skills
 Each skill is a directory in the workspace. Before doing a task a skill covers, read
 its SKILL.md and follow it.
