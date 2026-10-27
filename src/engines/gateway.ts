@@ -133,7 +133,12 @@ export function refuseRawCredentialsInVm(
 ): { ok: false; reason: string } | undefined {
   if (spec.isolation !== "vm") return undefined
   const routed = spec.gateway !== undefined
-  const routedKeys: readonly string[] = GATEWAY_PROVIDERS.map((p) => PROVIDER_ENV[p].key)
+  // CODEX_API_KEY is codex's alias for OPENAI_API_KEY; its engine sets it to
+  // the run token under a gateway too. No other engine passes it as a host key.
+  const routedKeys: readonly string[] = [
+    ...GATEWAY_PROVIDERS.map((p) => PROVIDER_ENV[p].key),
+    "CODEX_API_KEY",
+  ]
   const raw = [
     ...Object.entries(spec.provider.credentials ?? {})
       .filter(([, value]) => typeof value === "string" && value !== "")

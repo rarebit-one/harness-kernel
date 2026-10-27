@@ -189,6 +189,17 @@ describe("refuseRawCredentialsInVm", () => {
     expect(`${slot?.reason} ${host?.reason}`).not.toContain("LEAK")
   })
 
+  it("treats codex's CODEX_API_KEY alias as replaced by the gateway", () => {
+    expect(
+      refuseRawCredentialsInVm(
+        "codex",
+        { isolation: "vm", gateway: GATEWAY, provider: {} },
+        ["OPENAI_API_KEY", "CODEX_API_KEY"],
+        { CODEX_API_KEY: "sk-LEAK-host" },
+      ),
+    ).toBeUndefined()
+  })
+
   it("does not apply below vm", () => {
     expect(
       refuseRawCredentialsInVm("codex", { isolation: "container", provider: { credentials: BYO } }),
@@ -356,10 +367,21 @@ describe("native engine through a gateway", () => {
     )
   })
 
+  it("keeps an empty slot when nothing resolves, so the host key stays suppressed", () => {
+    const suppressed = spec("/sandbox", {
+      gateway: GATEWAY,
+      provider: { credentials: { anthropic: "" } },
+    })
+    const env = { ANTHROPIC_API_KEY: "sk-ant-LEAK-host" }
+    const selection = providerSelection(suppressed, env)
+    expect(selection.credentials).toEqual({ anthropic: "" })
+    expect(selection.preferred).toBeUndefined()
+  })
+
   it("hands out no run token when nothing would resolve, so the run still fails loud", async () => {
     const keyless = spec("/sandbox", { gateway: GATEWAY, provider: {} })
     const selection = providerSelection(keyless, {})
-    expect(selection.credentials).toEqual({})
+    expect(JSON.stringify(selection)).not.toContain(GATEWAY.runToken)
     await withEnv({ ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", OPENROUTER_API_KEY: "" }, () => {
       const support = new NativeEngine().supports(keyless)
       expect(support.ok).toBe(false)

@@ -289,7 +289,9 @@ export function providerSelection(
     const configured = GATEWAY_PROVIDERS.find(
       (p) => spec.provider.credentials?.[p] ?? env[CLOUD_ENV_KEYS[p]],
     )
-    if (!configured) return { ...spec.provider, credentials: localOnly, baseURLs }
+    // Nothing would resolve, so every cloud slot is absent or deliberately
+    // empty; keep them as sent, since an empty slot is what stops the host key.
+    if (!configured) return { ...spec.provider, baseURLs }
     preferred = configured
   }
 
