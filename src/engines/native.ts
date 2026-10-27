@@ -287,7 +287,7 @@ export function providerSelection(
   let preferred = spec.provider.preferred
   if (typeof preferred !== "string" || preferred.trim() === "") {
     const configured = GATEWAY_PROVIDERS.find(
-      (p) => spec.provider.credentials?.[p] || env[CLOUD_ENV_KEYS[p]],
+      (p) => spec.provider.credentials?.[p] ?? env[CLOUD_ENV_KEYS[p]],
     )
     if (!configured) return { ...spec.provider, credentials: localOnly, baseURLs }
     preferred = configured

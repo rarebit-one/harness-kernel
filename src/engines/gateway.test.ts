@@ -346,6 +346,16 @@ describe("native engine through a gateway", () => {
     expect(providerSelection(explicit, noHostKeys).preferred).toBe("openrouter")
   })
 
+  it("pins with the same nullish fallback as provider resolution", () => {
+    const emptySlot = spec("/sandbox", {
+      gateway: GATEWAY,
+      provider: { credentials: { anthropic: "", openai: "sk-oai-LEAK-byo" } },
+    })
+    expect(providerSelection(emptySlot, { ANTHROPIC_API_KEY: "sk-ant-LEAK-host" }).preferred).toBe(
+      "openai",
+    )
+  })
+
   it("hands out no run token when nothing would resolve, so the run still fails loud", async () => {
     const keyless = spec("/sandbox", { gateway: GATEWAY, provider: {} })
     const selection = providerSelection(keyless, {})
@@ -479,7 +489,7 @@ describe("review regressions: vm credential refusals", () => {
           isolation: "vm",
           gateway: GATEWAY,
           provider: {},
-          secrets: { STRIPE_KEY: "sk_live_LEAK" },
+          secrets: { SERVICE_KEY: "svc-LEAK-key" },
           connectors: [
             {
               name: "c",
@@ -501,7 +511,7 @@ describe("review regressions: vm credential refusals", () => {
       expect(refused.ok).toBe(false)
       const reason = !refused.ok ? refused.reason : ""
       expect(reason).toContain("claude-code engine refuses a vm run holding exposed credentials")
-      expect(reason).toContain("secret STRIPE_KEY")
+      expect(reason).toContain("secret SERVICE_KEY")
       expect(reason).toContain("connector c auth.token")
       expect(reason).toContain("connector h headers")
       expect(reason).not.toContain("LEAK")
@@ -516,7 +526,7 @@ describe("review regressions: vm credential refusals", () => {
             isolation: "vm",
             gateway: GATEWAY,
             provider: {},
-            secrets: { STRIPE_KEY: "sk_live_x" },
+            secrets: { SERVICE_KEY: "svc-key-x" },
             exposedCredentials: "allowed",
           }),
         ),
@@ -551,7 +561,7 @@ describe("review regressions: vm credential refusals", () => {
     await withEnv({ RUNNER_ENABLE_CLAUDE_CODE: "1", RUNNER_ISOLATION: "container" }, () => {
       expect(
         new ClaudeCodeEngine().supports(
-          spec("/tmp", { isolation: "container", secrets: { STRIPE_KEY: "sk_live_x" } }),
+          spec("/tmp", { isolation: "container", secrets: { SERVICE_KEY: "svc-key-x" } }),
         ),
       ).toEqual({ ok: true })
     })
