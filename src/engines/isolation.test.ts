@@ -80,6 +80,7 @@ describe("childEnv", () => {
       ANTHROPIC_ADMIN_API_KEY: "admin-key",
       CLAUDE_CODE_OAUTH_TOKEN: "oauth",
       ANTHROPIC_AUTH_TOKEN: "bearer",
+      ANTHROPIC_CUSTOM_HEADERS: "x-api-key: sk-header",
     }
     const env = childEnv(["ANTHROPIC_", "CLAUDE_"], {}, withKeys)
     expect(env.ANTHROPIC_BASE_URL).toBe("https://gateway.example")
@@ -87,6 +88,7 @@ describe("childEnv", () => {
     expect(env.ANTHROPIC_ADMIN_API_KEY).toBeUndefined()
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
+    expect(env.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined()
     expect(
       childEnv(["ANTHROPIC_"], { ANTHROPIC_API_KEY: "run-key" }, withKeys).ANTHROPIC_API_KEY,
     ).toBe("run-key")

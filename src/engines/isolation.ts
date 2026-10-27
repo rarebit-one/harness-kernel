@@ -106,9 +106,10 @@ const BASE_PREFIXES = ["LC_", "XDG_"] as const
  * the one provider key an engine needs arrives through `extra` instead. This is
  * a best-effort deny-list inside an allow-list: it cannot spot a secret whose
  * name carries none of these words (`*_DSN`, `*_DB_URL`), so keep prefixes
- * narrow.
+ * narrow. HEADER is on it because a custom-headers var
+ * (`ANTHROPIC_CUSTOM_HEADERS`) routinely carries an `x-api-key` or bearer.
  */
-const CREDENTIAL_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE|SESSION/i
+const CREDENTIAL_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE|SESSION|HEADER/i
 
 /**
  * The environment to spawn a vendor harness with: the base allowlist, any host
