@@ -172,6 +172,23 @@ describe("refuseRawCredentialsInVm", () => {
     ).toBeUndefined()
   })
 
+  it("still refuses what a gateway does not route: the local provider's key", () => {
+    const withGateway = { isolation: "vm" as const, gateway: GATEWAY }
+    const slot = refuseRawCredentialsInVm("native", {
+      ...withGateway,
+      provider: { preferred: "local", credentials: { ...BYO, local: "lk-LEAK-byo" } },
+    })
+    expect(slot?.reason).toContain("(provider.credentials.local)")
+    const host = refuseRawCredentialsInVm(
+      "native",
+      { ...withGateway, provider: { preferred: "local" } },
+      ["ANTHROPIC_API_KEY", "LOCAL_MODEL_API_KEY"],
+      { ANTHROPIC_API_KEY: "sk-ant-LEAK-host", LOCAL_MODEL_API_KEY: "lk-LEAK-host" },
+    )
+    expect(host?.reason).toContain("(host LOCAL_MODEL_API_KEY)")
+    expect(`${slot?.reason} ${host?.reason}`).not.toContain("LEAK")
+  })
+
   it("does not apply below vm", () => {
     expect(
       refuseRawCredentialsInVm("codex", { isolation: "container", provider: { credentials: BYO } }),

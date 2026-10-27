@@ -120,8 +120,10 @@ export function gatewayProblem(spec: Pick<RunSpec, "gateway">): string | undefin
  *
  * "Raw" is any non-empty `provider.credentials` slot, and any of `hostKeys`
  * (the env keys this engine would otherwise fall back to) set on the host. The
- * reason names the slots, never their values. A run with a gateway passes: its
- * engine sends the run token instead, whatever the payload carried.
+ * reason names the slots, never their values. A gateway exempts only what it
+ * replaces: the routed providers' slots and host keys, for which the engine
+ * sends the run token instead. Anything else it does not route (the local
+ * provider's key, say) is still raw, and still refused.
  */
 export function refuseRawCredentialsInVm(
   engine: string,
@@ -129,12 +131,17 @@ export function refuseRawCredentialsInVm(
   hostKeys: readonly string[] = [],
   env: NodeJS.ProcessEnv = process.env,
 ): { ok: false; reason: string } | undefined {
-  if (spec.isolation !== "vm" || spec.gateway !== undefined) return undefined
+  if (spec.isolation !== "vm") return undefined
+  const routed = spec.gateway !== undefined
+  const routedKeys: readonly string[] = GATEWAY_PROVIDERS.map((p) => PROVIDER_ENV[p].key)
   const raw = [
     ...Object.entries(spec.provider.credentials ?? {})
       .filter(([, value]) => typeof value === "string" && value !== "")
+      .filter(([slot]) => !(routed && (GATEWAY_PROVIDERS as readonly string[]).includes(slot)))
       .map(([slot]) => `provider.credentials.${slot}`),
-    ...hostKeys.filter((key) => Boolean(env[key])).map((key) => `host ${key}`),
+    ...hostKeys
+      .filter((key) => Boolean(env[key]) && !(routed && routedKeys.includes(key)))
+      .map((key) => `host ${key}`),
   ]
   if (raw.length === 0) return undefined
   return {
