@@ -72,6 +72,17 @@ describe("NativeEngine secret masking", () => {
     expect((JSON.parse(seen()) as { stdout: string }).stdout).toBe("ok")
   })
 
+  it("masks a multi-line secret in run_code's JSON-encoded result", async () => {
+    const key = '-----BEGIN KEY-----\nabc"def\\ghi\n-----END KEY-----'
+    const { loop, seen } = callingLoop('printf "%s" "$PRIVATE_KEY"')
+    await new NativeEngine({ loop }).run(spec(workdir, { secrets: { PRIVATE_KEY: key } }), {
+      log: () => {},
+    })
+
+    expect((JSON.parse(seen()) as { stdout: string }).stdout).toBe("[secret]")
+    expect(seen()).not.toContain("abc")
+  })
+
   it("leaves values shorter than the minimum alone", async () => {
     const { loop, seen } = callingLoop('printf "%s" "$REGION"')
     await new NativeEngine({ loop }).run(spec(workdir), { log: () => {} })

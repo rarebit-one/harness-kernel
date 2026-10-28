@@ -32,9 +32,16 @@ export const MASKED_SECRET = "[secret]"
  * the code transformed (encoded, split) is not caught.
  */
 export function secretMasker(secrets: Record<string, string> = {}): (text: string) => string {
-  const values = [...new Set(Object.values(secrets))]
-    .filter((v) => typeof v === "string" && v.length >= MIN_MASKED_SECRET_LENGTH)
-    .sort((a, b) => b.length - a.length)
+  // Each value is also matched in its JSON-escaped form: tools such as
+  // run_code JSON-encode their result, so a value holding a quote, backslash
+  // or newline (a multi-line private key) reaches the model escaped.
+  const values = [
+    ...new Set(
+      Object.values(secrets)
+        .filter((v) => typeof v === "string" && v.length >= MIN_MASKED_SECRET_LENGTH)
+        .flatMap((v) => [v, JSON.stringify(v).slice(1, -1)]),
+    ),
+  ].sort((a, b) => b.length - a.length)
   if (values.length === 0) return (text) => text
   return (text) => {
     let out = text
