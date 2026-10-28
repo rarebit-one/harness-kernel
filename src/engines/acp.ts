@@ -407,6 +407,11 @@ export const OPENCODE_AGENT: AcpAgentSpec = {
   // Provider settings (base URLs, org IDs) that a BYO key does not cover ride
   // through as non-credential vars under the provider prefixes.
   inheritEnvPrefixes: ["ANTHROPIC_", "OPENAI_", "OPENROUTER_", "OPENCODE_"],
+  // OpenCode takes provider endpoints from `provider.<id>.options.baseURL` in
+  // its own config (https://opencode.ai/docs/providers), not from the
+  // *_BASE_URL env the gateway sets, so a gateway run would send the run token
+  // to the public endpoint. Refused until that config mapping exists.
+  gatewaySupported: false,
   env: (spec) => {
     const env: Record<string, string> = {}
     const creds = spec.provider.credentials

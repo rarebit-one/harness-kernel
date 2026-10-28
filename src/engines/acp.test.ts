@@ -214,8 +214,8 @@ describe("OPENCODE_AGENT spec", () => {
     expect(Object.keys(env).filter((k) => k.endsWith("_API_KEY"))).toHaveLength(0)
   })
 
-  it("supports gateway runs (all three providers have routes)", () => {
-    expect(OPENCODE_AGENT.gatewaySupported).toBeUndefined()
+  it("refuses gateway runs: OpenCode reads endpoints from its own config, not *_BASE_URL", () => {
+    expect(OPENCODE_AGENT.gatewaySupported).toBe(false)
   })
 
   it("declares no host key envs (reads only from spec.provider.credentials)", () => {

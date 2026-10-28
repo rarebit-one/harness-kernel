@@ -535,7 +535,10 @@ AcpEngine(spec, capabilityServerScript)` for custom configuration.
 and `EVE_*` config are native-only.
 
 **`opencode` (`opencode acp`)** — BYO Anthropic / OpenAI / OpenRouter keys from
-`spec.provider.credentials`; all three have gateway routes. The remaining 70+
+`spec.provider.credentials`. Gateway runs are refused for now: OpenCode takes
+provider endpoints from `provider.<id>.options.baseURL` in its own config, not
+from the `*_BASE_URL` env the gateway sets, so a gateway run would send the run
+token to the public endpoint. The remaining 70+
 providers OpenCode supports (Vertex AI, AWS Bedrock, GitHub Copilot, Snowflake,
 …) require OpenCode's own stored config (`~/.opencode/` or `OPENCODE_HOME`) and
 are native-only: there is no BYO credentials slot for them in `ProviderSelection`
