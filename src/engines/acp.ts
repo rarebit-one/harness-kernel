@@ -447,6 +447,93 @@ export function opencodeModel(spec: RunSpec): string | undefined {
   )
 }
 
+/**
+ * The host's inline OpenCode config (`OPENCODE_CONFIG_CONTENT`, which the
+ * `OPENCODE_` inherit prefix lets through), parsed so a run's model override
+ * can be merged INTO it rather than replace it: a runner that supplies
+ * provider endpoints or custom providers that way must keep them when a run
+ * also names a model. Absent means `{}`. Anything but a JSON object is refused
+ * here with a clear message, since OpenCode would reject it at startup anyway.
+ */
+export function inheritedOpencodeConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  const raw = env.OPENCODE_CONFIG_CONTENT
+  if (!raw || raw.trim() === "") return {}
+  let parsed: unknown
+  try {
+    // OpenCode config is JSONC (https://opencode.ai/docs/config/#format):
+    // comments and trailing commas are valid there and must not fail here.
+    parsed = JSON.parse(stripJsonc(raw))
+  } catch (err) {
+    throw new Error(
+      `opencode: host OPENCODE_CONFIG_CONTENT is not valid JSON (${(err as Error).message})`,
+      { cause: err },
+    )
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("opencode: host OPENCODE_CONFIG_CONTENT must be a JSON object")
+  }
+  return parsed as Record<string, unknown>
+}
+
+/**
+ * JSONC → JSON: drops line comments, block comments and trailing commas
+ * outside string literals, so `JSON.parse` accepts what OpenCode accepts.
+ * Strings are walked with their escapes, so a `//` or `,}` inside a value
+ * survives.
+ */
+export function stripJsonc(text: string): string {
+  let out = ""
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]!
+    if (ch === '"') {
+      // copy the string literal verbatim, honouring escapes
+      let j = i + 1
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1
+      out += text.slice(i, j + 1)
+      i = j + 1
+      continue
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      const end = text.indexOf("\n", i)
+      i = end === -1 ? text.length : end
+      continue
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2)
+      i = end === -1 ? text.length : end + 2
+      continue
+    }
+    if (ch === ",") {
+      // a comma followed only by whitespace/comments and then `}` or `]` is trailing
+      let j = i + 1
+      for (;;) {
+        while (j < text.length && /\s/.test(text[j]!)) j++
+        if (text[j] === "/" && text[j + 1] === "/") {
+          const end = text.indexOf("\n", j)
+          j = end === -1 ? text.length : end
+          continue
+        }
+        if (text[j] === "/" && text[j + 1] === "*") {
+          const end = text.indexOf("*/", j + 2)
+          j = end === -1 ? text.length : end + 2
+          continue
+        }
+        break
+      }
+      if (text[j] === "}" || text[j] === "]") {
+        i += 1
+        continue
+      }
+    }
+    out += ch
+    i += 1
+  }
+  return out
+}
+
 export const OPENCODE_AGENT: AcpAgentSpec = {
   name: "opencode",
   enableEnv: "RUNNER_ENABLE_OPENCODE",
@@ -467,11 +554,14 @@ export const OPENCODE_AGENT: AcpAgentSpec = {
     if (creds?.anthropic) env.ANTHROPIC_API_KEY = creds.anthropic
     if (creds?.openai) env.OPENAI_API_KEY = creds.openai
     if (creds?.openrouter) env.OPENROUTER_API_KEY = creds.openrouter
-    // The requested model rides on OpenCode's inline config override. The
-    // same channel is where gateway routes (`provider.<id>.options.baseURL`)
-    // would go once gateway runs are supported.
+    // The requested model rides on OpenCode's inline config override, merged
+    // into whatever inline config the host already supplies (provider
+    // endpoints, custom providers), which `childEnv` would otherwise see
+    // replaced by this value. The same channel is where gateway routes
+    // (`provider.<id>.options.baseURL`) would go once gateway runs are
+    // supported.
     const model = opencodeModel(spec)
-    if (model) env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model })
+    if (model) env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ ...inheritedOpencodeConfig(), model })
     return env
   },
 }
