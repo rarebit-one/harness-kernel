@@ -1,6 +1,6 @@
 import { runCode } from "../primitives/codeExec.js"
 import { httpFetch } from "../primitives/http.js"
-import { readFileSafe, listFiles } from "../primitives/fs.js"
+import { readSandboxFile, listFiles, type SandboxRead } from "../primitives/fs.js"
 import { connectMcp, type McpConnection } from "../connectors/mcpClient.js"
 import type { ConnectorConfig } from "../types.js"
 import type { ToolSpec } from "../providers/types.js"
@@ -86,6 +86,29 @@ function stringHeaders(v: unknown): Record<string, string> | undefined {
 }
 
 /**
+ * What `read_file` tells the model. Anything but text names the reason and the
+ * way forward: a large or binary file is read in part, or inspected, with code,
+ * rather than pushed whole into the conversation.
+ */
+function describeRead(path: string, read: SandboxRead): string {
+  switch (read.kind) {
+    case "text":
+      return read.text
+    case "missing":
+      return "(not found)"
+    case "directory":
+      return `(not read: ${path} is a directory; use list_files)`
+    case "too_large":
+      return (
+        `(not read: ${path} is ${read.bytes} bytes, over the ${read.maxBytes}-byte read_file limit; ` +
+        "read part of it with run_code, e.g. head, tail, grep or sed -n)"
+      )
+    case "binary":
+      return `(not read: ${path} is a binary file of ${read.bytes} bytes; inspect or convert it with run_code)`
+  }
+}
+
+/**
  * General-purpose primitives, scoped to the run sandbox. `env` carries the
  * resolved secrets (see secretsToEnv) into executed code. Domain logic is the
  * user's own repo code, invoked through `run_code` — never baked in here.
@@ -155,7 +178,8 @@ export function primitiveTools(
           required: ["path"],
         },
       },
-      execute: async (input) => (await readFileSafe(sandboxDir, str(input.path))) ?? "(not found)",
+      execute: async (input) =>
+        describeRead(str(input.path), await readSandboxFile(sandboxDir, str(input.path))),
     },
     {
       spec: {

@@ -69,6 +69,53 @@ export async function readFileSafe(
   }
 }
 
+/**
+ * What a sandbox read found, for a caller that has to tell the model *why* it
+ * got no text. `readFileSafe` collapses every refusal to `null`; a model shown
+ * "(not found)" for a file that exists but is large or binary looks for it
+ * elsewhere instead of reading part of it with code.
+ */
+export type SandboxRead =
+  | { kind: "text"; text: string }
+  | { kind: "missing" }
+  | { kind: "directory" }
+  | { kind: "too_large"; bytes: number; maxBytes: number }
+  | { kind: "binary"; bytes: number }
+
+/**
+ * `readFileSafe` with the refusal named. Same guards, same single descriptor:
+ * a symlink escape or a non-regular file still reads as `missing`, so this
+ * reports nothing about the tree that `readFileSafe` would not. A file is
+ * `binary` when it holds a NUL byte or is not valid UTF-8.
+ */
+export async function readSandboxFile(
+  dir: string,
+  relPath: string,
+  maxBytes: number = DEFAULT_MAX_BYTES,
+): Promise<SandboxRead> {
+  const target = resolveWithin(dir, relPath)
+  let fh: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    if (!(await realWithin(dir, target))) return { kind: "missing" }
+    fh = await open(target, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+    const info = await fh.stat()
+    if (info.isDirectory()) return { kind: "directory" }
+    if (!info.isFile()) return { kind: "missing" }
+    if (info.size > maxBytes) return { kind: "too_large", bytes: info.size, maxBytes }
+    const bytes = await fh.readFile()
+    if (bytes.includes(0)) return { kind: "binary", bytes: bytes.length }
+    try {
+      return { kind: "text", text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) }
+    } catch {
+      return { kind: "binary", bytes: bytes.length }
+    }
+  } catch {
+    return { kind: "missing" }
+  } finally {
+    await fh?.close().catch(() => {})
+  }
+}
+
 /** List files (recursively, `.git` excluded) under `relDir`, as sandbox-relative paths. */
 export async function listFiles(dir: string, relDir = "."): Promise<string[]> {
   const base = path.resolve(dir)

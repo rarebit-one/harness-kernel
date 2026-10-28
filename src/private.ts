@@ -116,6 +116,9 @@ export function privateRunChannels(
           maxSteps: event.maxSteps,
           maxDurationMs: event.maxDurationMs,
           tools: [...event.tools],
+          ...(event.toolSchemaBytes !== undefined
+            ? { toolSchemaBytes: event.toolSchemaBytes }
+            : {}),
         }
       case "model.turn": {
         const usage = redactUsage(event.usage)

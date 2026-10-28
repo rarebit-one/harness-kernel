@@ -4,10 +4,10 @@ import { runEventEmitter } from "../events.js"
 import { nativeLoop, runWithEvents, type Loop } from "../loop.js"
 import { asChatModel } from "../models/chat.js"
 import { providerAvailability, selectProvider } from "../providers/index.js"
-import { secretsToEnv } from "../secrets.js"
+import { secretMasker, secretsToEnv } from "../secrets.js"
 import { primitiveTools, connectorTools } from "../tools/registry.js"
 import { PrivateRunError, privateRunChannels } from "../private.js"
-import type { Tool } from "../tools/registry.js"
+import type { Tool, ToolContext } from "../tools/registry.js"
 import type { WorkflowDefinition } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { environmentInstructions } from "./environment.js"
@@ -167,7 +167,9 @@ export class NativeEngine implements AgentEngine {
       return canceledBeforeLoop(ctx)
     }
     try {
-      const tools = [...primitives, ...connectors.tools]
+      // The run's secrets live in run_code's env, so mask their values in
+      // everything a tool hands back to the model.
+      const tools = maskToolOutput([...primitives, ...connectors.tools], secretMasker(spec.secrets))
       ctx.log(`tools: ${tools.map((t) => t.spec.name).join(", ") || "(none)"}`)
 
       // Budgets are resolved before the call: a loop is handed numbers, not
@@ -397,4 +399,42 @@ function buildUserPrompt(
     "## Workspace context",
     context || "(no context files matched)",
   ].join("\n")
+}
+
+/**
+ * Wrap each tool so the model-facing string passes through `mask`, on success
+ * and on a thrown error alike. The typed `structured` payload is left alone: it
+ * goes to the caller, not the model. A thrown error is replaced only when
+ * masking changed its message, so an abort or timeout error reaches the loop as
+ * itself and is still classified as a stop rather than a failure.
+ */
+function maskToolOutput(tools: Tool[], mask: (text: string) => string): Tool[] {
+  const masked = async <T>(work: () => Promise<T>, project: (value: T) => T): Promise<T> => {
+    try {
+      return project(await work())
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const safe = mask(message)
+      if (safe === message) throw err
+      // No `cause`: the original error, or its own cause, still carries the secret.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error(safe)
+    }
+  }
+  return tools.map((tool) => {
+    const executeStructured = tool.executeStructured?.bind(tool)
+    return {
+      ...tool,
+      execute: (input, ctx) => masked(() => tool.execute(input, ctx), mask),
+      ...(executeStructured
+        ? {
+            executeStructured: (input: Record<string, unknown>, ctx?: ToolContext) =>
+              masked(
+                () => executeStructured(input, ctx),
+                (out) => ({ ...out, content: mask(out.content) }),
+              ),
+          }
+        : {}),
+    }
+  })
 }
