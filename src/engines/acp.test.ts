@@ -3,7 +3,14 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { ConnectorConfig } from "../types.js"
-import { AcpEngine, EVE_AGENT, type AcpDriver, type AcpOptions } from "./acp.js"
+import {
+  AcpEngine,
+  EVE_AGENT,
+  GEMINI_AGENT,
+  OPENCODE_AGENT,
+  type AcpDriver,
+  type AcpOptions,
+} from "./acp.js"
 import { CAPABILITY_SERVER_NAME } from "./capabilityMcp.js"
 import type { EngineContext, RunSpec } from "./types.js"
 
@@ -184,5 +191,218 @@ describe("AcpEngine.run", () => {
     const ctx = recordingCtx()
     await new AcpEngine(EVE_AGENT, SCRIPT, drive).run(spec({}, workdir), ctx)
     expect(ctx.logs.some((l) => l.includes("stopped (cancelled)"))).toBe(true)
+  })
+})
+
+describe("OPENCODE_AGENT spec", () => {
+  it("launches with 'opencode acp' and maps BYO credentials onto provider env vars", () => {
+    expect(OPENCODE_AGENT.name).toBe("opencode")
+    expect(OPENCODE_AGENT.command).toBe("opencode")
+    expect(OPENCODE_AGENT.args(spec())).toEqual(["acp"])
+
+    const s = spec({
+      provider: { credentials: { anthropic: "sk-ant", openai: "sk-oai", openrouter: "sk-or" } },
+    })
+    const env = OPENCODE_AGENT.env(s)
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant")
+    expect(env.OPENAI_API_KEY).toBe("sk-oai")
+    expect(env.OPENROUTER_API_KEY).toBe("sk-or")
+  })
+
+  it("passes the requested model through OpenCode's inline config override", () => {
+    const parse = (env: Record<string, string>) =>
+      JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? "null") as { model?: string } | null
+    // provider.preferred names the provider for a bare model name
+    expect(
+      parse(
+        OPENCODE_AGENT.env(
+          spec({ provider: { preferred: "anthropic", model: "claude-sonnet-5-5" } }),
+        ),
+      ),
+    ).toEqual({ model: "anthropic/claude-sonnet-5-5" })
+    // else the first BYO key, in anthropic/openai/openrouter order
+    expect(
+      parse(
+        OPENCODE_AGENT.env(spec({ provider: { model: "gpt-5", credentials: { openai: "sk-o" } } })),
+      ),
+    ).toEqual({ model: "openai/gpt-5" })
+    // an explicit provider/model passes through untouched
+    expect(parse(OPENCODE_AGENT.env(spec({ provider: { model: "openrouter/x/y" } })))).toEqual({
+      model: "openrouter/x/y",
+    })
+    // a provider-namespaced id stays on the run's provider: OpenRouter's
+    // `openai/gpt-4.1` must not become OpenCode's direct `openai` provider
+    expect(
+      parse(
+        OPENCODE_AGENT.env(
+          spec({ provider: { preferred: "openrouter", model: "openai/gpt-4.1" } }),
+        ),
+      ),
+    ).toEqual({ model: "openrouter/openai/gpt-4.1" })
+    expect(
+      parse(
+        OPENCODE_AGENT.env(
+          spec({ provider: { model: "openai/gpt-4.1", credentials: { openrouter: "sk-or" } } }),
+        ),
+      ),
+    ).toEqual({ model: "openrouter/openai/gpt-4.1" })
+    // ...and is not doubled when it already carries that provider
+    expect(
+      parse(
+        OPENCODE_AGENT.env(
+          spec({ provider: { preferred: "openrouter", model: "openrouter/openai/gpt-4.1" } }),
+        ),
+      ),
+    ).toEqual({ model: "openrouter/openai/gpt-4.1" })
+    // no model, no override: OpenCode's own config decides
+    expect(OPENCODE_AGENT.env(spec()).OPENCODE_CONFIG_CONTENT).toBeUndefined()
+  })
+
+  it("refuses a bare model name it cannot attribute to a provider", () => {
+    expect(() => OPENCODE_AGENT.env(spec({ provider: { model: "mystery-1" } }))).toThrow(
+      /cannot honour model "mystery-1"/,
+    )
+    expect(() =>
+      OPENCODE_AGENT.env(spec({ provider: { preferred: "local", model: "mystery-1" } })),
+    ).toThrow(/cannot honour model/)
+  })
+
+  it("passes no keys when credentials are absent", () => {
+    const env = OPENCODE_AGENT.env(spec())
+    expect(Object.keys(env).filter((k) => k.endsWith("_API_KEY"))).toHaveLength(0)
+  })
+
+  it("refuses gateway runs: OpenCode reads endpoints from its own config, not *_BASE_URL", () => {
+    expect(OPENCODE_AGENT.gatewaySupported).toBe(false)
+  })
+
+  it("declares no host key envs (reads only from spec.provider.credentials)", () => {
+    expect(OPENCODE_AGENT.hostKeyEnvs).toBeUndefined()
+  })
+
+  it("includes OPENCODE_ in its inherit prefixes alongside the provider prefixes", () => {
+    expect(OPENCODE_AGENT.inheritEnvPrefixes).toContain("OPENCODE_")
+    expect(OPENCODE_AGENT.inheritEnvPrefixes).toContain("ANTHROPIC_")
+  })
+})
+
+describe("GEMINI_AGENT spec", () => {
+  const savedKey = process.env.GEMINI_API_KEY
+  afterEach(() => {
+    if (savedKey === undefined) delete process.env.GEMINI_API_KEY
+    else process.env.GEMINI_API_KEY = savedKey
+  })
+
+  it("launches with 'gemini --acp' (flag, not subcommand)", () => {
+    expect(GEMINI_AGENT.name).toBe("gemini")
+    expect(GEMINI_AGENT.command).toBe("gemini")
+    expect(GEMINI_AGENT.args(spec())).toEqual(["--acp"])
+  })
+
+  it("passes the run's requested model as --model", () => {
+    expect(GEMINI_AGENT.args(spec({ provider: { model: "gemini-2.5-pro" } }))).toEqual([
+      "--acp",
+      "--model",
+      "gemini-2.5-pro",
+    ])
+  })
+
+  it("inlines AGENTS.md into the prompt, since the CLI discovers GEMINI.md instead", async () => {
+    expect(GEMINI_AGENT.promptAgentsMd).toBe(true)
+    const workdir = await mkdtemp(path.join(tmpdir(), "acp-gemini-"))
+    try {
+      const drive = fakeDriver(async () => ({ stopReason: "end_turn" }))
+      const s = spec(
+        {
+          instructions: { agentsMd: "Root rule: never force-push." },
+          agentFiles: [{ path: "api/AGENTS.md", content: "API rule: keep handlers thin." }],
+        },
+        workdir,
+      )
+      await new AcpEngine(GEMINI_AGENT, SCRIPT, drive).run(s, recordingCtx())
+      expect(drive.captured?.prompt).toContain("Root rule: never force-push.")
+      expect(drive.captured?.prompt).toContain("## Instructions for `api/`")
+      expect(drive.captured?.prompt).toContain("API rule: keep handlers thin.")
+      // An agent that reads AGENTS.md itself (eve) gets neither inlined.
+      await new AcpEngine(EVE_AGENT, SCRIPT, drive).run(s, recordingCtx())
+      expect(drive.captured?.prompt).not.toContain("Root rule: never force-push.")
+      expect(drive.captured?.prompt).not.toContain("API rule: keep handlers thin.")
+    } finally {
+      await rm(workdir, { recursive: true, force: true })
+    }
+  })
+
+  it("reads GEMINI_API_KEY from the host env (no BYO credentials slot)", () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key"
+    const env = GEMINI_AGENT.env(spec())
+    expect(env.GEMINI_API_KEY).toBe("test-gemini-key")
+  })
+
+  it("passes no key when GEMINI_API_KEY is absent from the host env", () => {
+    delete process.env.GEMINI_API_KEY
+    const env = GEMINI_AGENT.env(spec())
+    expect(env.GEMINI_API_KEY).toBeUndefined()
+  })
+
+  it("refuses gateway runs because the gateway has no route for Gemini's provider", () => {
+    const savedEnable = process.env.RUNNER_ENABLE_GEMINI
+    process.env.RUNNER_ENABLE_GEMINI = "1"
+    process.env.RUNNER_ISOLATION = "vm"
+    try {
+      const engine = new AcpEngine(
+        GEMINI_AGENT,
+        SCRIPT,
+        fakeDriver(async () => ({ stopReason: "end_turn" })),
+      )
+      const result = engine.supports(
+        spec({
+          isolation: "vm",
+          gateway: { baseUrl: "https://gw.example.com", runToken: "tok-abc" },
+        }),
+      )
+      expect(result.ok).toBe(false)
+      expect((result as { ok: false; reason: string }).reason).toMatch(/no gateway route/)
+    } finally {
+      if (savedEnable === undefined) delete process.env.RUNNER_ENABLE_GEMINI
+      else process.env.RUNNER_ENABLE_GEMINI = savedEnable
+      delete process.env.RUNNER_ISOLATION
+    }
+  })
+
+  it("passes no host key when the run turns host credential fallback off", () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key"
+    const env = GEMINI_AGENT.env(spec({ provider: { envFallback: false } }))
+    expect(env.GEMINI_API_KEY).toBeUndefined()
+  })
+
+  it("refuses a run that turns host credential fallback off, since the host is its only key source", () => {
+    const savedEnable = process.env.RUNNER_ENABLE_GEMINI
+    process.env.RUNNER_ENABLE_GEMINI = "1"
+    process.env.RUNNER_ISOLATION = "vm"
+    try {
+      const engine = new AcpEngine(
+        GEMINI_AGENT,
+        SCRIPT,
+        fakeDriver(async () => ({ stopReason: "end_turn" })),
+      )
+      const result = engine.supports(spec({ isolation: "vm", provider: { envFallback: false } }))
+      expect(result.ok).toBe(false)
+      expect((result as { ok: false; reason: string }).reason).toMatch(
+        /disables host credential fallback/,
+      )
+    } finally {
+      if (savedEnable === undefined) delete process.env.RUNNER_ENABLE_GEMINI
+      else process.env.RUNNER_ENABLE_GEMINI = savedEnable
+      delete process.env.RUNNER_ISOLATION
+    }
+  })
+
+  it("declares GEMINI_API_KEY as a host key env for vm credential checks", () => {
+    expect(GEMINI_AGENT.hostKeyEnvs).toContain("GEMINI_API_KEY")
+  })
+
+  it("includes GEMINI_ and GOOGLE_ inherit prefixes for CLI config vars", () => {
+    expect(GEMINI_AGENT.inheritEnvPrefixes).toContain("GEMINI_")
+    expect(GEMINI_AGENT.inheritEnvPrefixes).toContain("GOOGLE_")
   })
 })

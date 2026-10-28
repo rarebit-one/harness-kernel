@@ -47,6 +47,31 @@ export interface AcpAgentSpec {
    * own settings.
    */
   readonly inheritEnvPrefixes?: readonly string[]
+  /**
+   * Host env keys the agent reads as its provider credentials — the keys its
+   * `env()` function explicitly copies from `process.env` in non-gateway mode.
+   * These are checked in `supports()` when `isolation` is `"vm"`, to refuse a
+   * run holding raw model credentials in the host env. Absent means the spec
+   * reads no host keys (it reads only from `spec.provider.credentials`).
+   */
+  readonly hostKeyEnvs?: readonly string[]
+  /**
+   * When `false`, this agent has no gateway route: `RunSpec.gateway` would cover
+   * none of its provider keys, leaving the agent keyless at runtime. `supports()`
+   * refuses such a run rather than starting the agent without credentials.
+   * Absent (or `true`) means gateway runs are allowed; the agent's provider env
+   * is built with `gatewayEnv` as usual.
+   */
+  readonly gatewaySupported?: boolean
+  /**
+   * When `true`, the agent does not discover the workdir's `AGENTS.md` files by
+   * itself (it reads another context file by default), so the root and scoped
+   * `AGENTS.md` contents are inlined into the prompt's instructions, the way
+   * the Claude Code engine appends them. Absent (or `false`) means the agent
+   * reads `AGENTS.md` from the workdir and only the system instructions and
+   * skills index lead the prompt.
+   */
+  readonly promptAgentsMd?: boolean
 }
 
 /**
@@ -154,12 +179,31 @@ export class AcpEngine implements AgentEngine {
         reason: `${this.name} engine requires the ephemeral runner profile (per-run container isolation)`,
       }
     }
-    // An ACP agent gets only the run's keys (never the host's), so only the
-    // payload's credentials count as raw here.
+    // A spec that can only read its key from the host env has nothing to run on
+    // when the consumer meters credentials itself and turned host fallback off.
+    if ((this.agent.hostKeyEnvs?.length ?? 0) > 0 && spec.provider.envFallback === false) {
+      return {
+        ok: false,
+        reason:
+          `${this.name} engine reads its key only from the host env ` +
+          `(${this.agent.hostKeyEnvs?.join(", ")}), and this run disables host credential fallback`,
+      }
+    }
+    if (this.agent.gatewaySupported === false && spec.gateway) {
+      return {
+        ok: false,
+        reason:
+          `${this.name} engine has no gateway route for its provider credentials ` +
+          "(no supported provider key is covered by the credential gateway); remove RunSpec.gateway",
+      }
+    }
+    // hostKeyEnvs names the host env keys the spec's env() reads directly.
+    // Those reach the harness in the clear, so they count as raw credentials on
+    // a vm run just as BYO keys in spec.provider.credentials do.
     return (
       refuseUnisolated(this.name, spec) ??
       refuseBadGateway(this.name, spec) ??
-      refuseCredentialsInVm(this.name, spec) ?? { ok: true }
+      refuseCredentialsInVm(this.name, spec, this.agent.hostKeyEnvs ?? []) ?? { ok: true }
     )
   }
 
@@ -212,10 +256,14 @@ export class AcpEngine implements AgentEngine {
       mcpServers: toAcpMcpServers(servers),
       // ACP's session/new has no system-prompt field, so the environment's
       // system instructions and skills index lead the task prompt; the agent
-      // reads the workdir's AGENTS.md (materialized by the caller) itself.
+      // reads the workdir's AGENTS.md (materialized by the caller) itself,
+      // unless its spec says it would not find it (`promptAgentsMd`).
       prompt: harnessPrompt(
         spec,
-        environmentInstructions(spec, { agentsMd: false, skillsIndex: true }),
+        environmentInstructions(spec, {
+          agentsMd: this.agent.promptAgentsMd === true,
+          skillsIndex: true,
+        }),
       ),
       ...(spec.limits?.maxDurationMs !== undefined
         ? { maxDurationMs: spec.limits.maxDurationMs }
@@ -350,4 +398,129 @@ export const EVE_AGENT: AcpAgentSpec = {
 function withoutCredentials(spec: RunSpec): RunSpec {
   const { credentials: _dropped, ...provider } = spec.provider
   return { ...spec, provider }
+}
+
+/**
+ * OpenCode (`opencode acp`) — an ACP server over stdio that supports 75+
+ * providers through the AI SDK and Models.dev. This spec wires the three
+ * providers the kernel's credential gateway can route (Anthropic, OpenAI,
+ * OpenRouter) as explicit keys; all others require OpenCode's own stored
+ * config (see native-only features in the README "Engines → ACP agents").
+ *
+ * ACP invocation: `opencode acp`
+ * Provider keys: ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY
+ * Docs: https://opencode.ai/docs/acp
+ */
+/** OpenCode provider ids for the kernel's three routable providers. */
+const OPENCODE_PROVIDERS = ["anthropic", "openai", "openrouter"] as const
+
+/**
+ * The run's requested model in OpenCode's `provider/model` form, or undefined
+ * when the run names none. `opencode acp` takes no `--model` flag; the model is
+ * the top-level `model` key of its config, which `OPENCODE_CONFIG_CONTENT`
+ * supplies inline as the highest-precedence runtime override
+ * (https://opencode.ai/docs/config). OpenCode reads the first `/` segment as
+ * its provider id, so the run's provider is resolved FIRST (`provider.preferred`,
+ * else the first BYO key in anthropic/openai/openrouter order, the kernel's
+ * usual pick) and prefixed unless the model already carries it. That keeps a
+ * provider-namespaced id such as OpenRouter's `openai/gpt-4.1` on OpenRouter
+ * (`openrouter/openai/gpt-4.1`) instead of letting OpenCode read `openai` as
+ * the provider. With no resolvable provider, an already-qualified
+ * `<provider>/<model>` passes through for OpenCode's own config to serve, and a
+ * bare name is refused: OpenCode would resolve it against its own default
+ * provider, a different selection than the caller asked for.
+ */
+export function opencodeModel(spec: RunSpec): string | undefined {
+  const model = spec.provider.model?.trim()
+  if (!model) return undefined
+  const preferred = spec.provider.preferred?.trim()
+  const provider =
+    preferred && (OPENCODE_PROVIDERS as readonly string[]).includes(preferred)
+      ? preferred
+      : OPENCODE_PROVIDERS.find((id) => Boolean(spec.provider.credentials?.[id]))
+  if (provider) return model.startsWith(`${provider}/`) ? model : `${provider}/${model}`
+  if (model.includes("/")) return model
+  throw new Error(
+    `opencode: cannot honour model "${model}" without a provider — set provider.preferred ` +
+      `(anthropic, openai or openrouter), supply that provider's credential, or name the ` +
+      `model as "<provider>/<model>"`,
+  )
+}
+
+export const OPENCODE_AGENT: AcpAgentSpec = {
+  name: "opencode",
+  enableEnv: "RUNNER_ENABLE_OPENCODE",
+  command: "opencode",
+  args: () => ["acp"],
+  // OPENCODE_ covers opencode's own configuration env vars.
+  // Provider settings (base URLs, org IDs) that a BYO key does not cover ride
+  // through as non-credential vars under the provider prefixes.
+  inheritEnvPrefixes: ["ANTHROPIC_", "OPENAI_", "OPENROUTER_", "OPENCODE_"],
+  // OpenCode takes provider endpoints from `provider.<id>.options.baseURL` in
+  // its own config (https://opencode.ai/docs/providers), not from the
+  // *_BASE_URL env the gateway sets, so a gateway run would send the run token
+  // to the public endpoint. Refused until that config mapping exists.
+  gatewaySupported: false,
+  env: (spec) => {
+    const env: Record<string, string> = {}
+    const creds = spec.provider.credentials
+    if (creds?.anthropic) env.ANTHROPIC_API_KEY = creds.anthropic
+    if (creds?.openai) env.OPENAI_API_KEY = creds.openai
+    if (creds?.openrouter) env.OPENROUTER_API_KEY = creds.openrouter
+    // The requested model rides on OpenCode's inline config override. The
+    // same channel is where gateway routes (`provider.<id>.options.baseURL`)
+    // would go once gateway runs are supported.
+    const model = opencodeModel(spec)
+    if (model) env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model })
+    return env
+  },
+}
+
+/**
+ * Gemini CLI (`gemini --acp`) — an ACP server over stdio that drives Google's
+ * Gemini models. `ProviderSelection.credentials` has no slot for Gemini's
+ * provider, so the API key is read from `GEMINI_API_KEY` on the host env.
+ * The kernel's credential gateway has no route for Gemini, so gateway-mode
+ * runs are refused (`gatewaySupported: false`); see native-only features in
+ * the README "Engines → ACP agents".
+ *
+ * ACP invocation: `gemini --acp`  (note: `--acp` is a flag, not a subcommand)
+ * Provider key: GEMINI_API_KEY
+ * Docs: https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/acp-mode.md
+ */
+export const GEMINI_AGENT: AcpAgentSpec = {
+  name: "gemini",
+  enableEnv: "RUNNER_ENABLE_GEMINI",
+  command: "gemini",
+  // `--acp` is a flag on the `gemini` command, not a subcommand. A requested
+  // model rides on `--model`, else the CLI's configured default applies.
+  args: (spec) => (spec.provider.model ? ["--acp", "--model", spec.provider.model] : ["--acp"]),
+  // Gemini CLI discovers `GEMINI.md`, not `AGENTS.md` (reading `AGENTS.md`
+  // needs its `context.fileName` setting), so the environment's root and
+  // scoped `AGENTS.md` are inlined into the prompt instead.
+  promptAgentsMd: true,
+  // GEMINI_ covers GEMINI_CLI_HOME and other gemini config vars (non-credential).
+  // GOOGLE_ covers Vertex AI config (GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION).
+  // GEMINI_API_KEY is passed explicitly in env() below; the *KEY* filter in
+  // childEnv would strip it if it arrived through inheritEnvPrefixes.
+  inheritEnvPrefixes: ["GEMINI_", "GOOGLE_"],
+  // ProviderSelection has no credentials slot for Gemini, so the key comes
+  // from the host env. hostKeyEnvs names it so supports() can refuse a vm run
+  // that would carry it into the guest unrouted.
+  hostKeyEnvs: ["GEMINI_API_KEY"],
+  // The kernel's gateway covers anthropic/openai/openrouter only; there is no
+  // gateway route for Gemini's provider, so a gateway run would start the
+  // agent without its key. Refuse rather than silently fail at auth.
+  gatewaySupported: false,
+  env: (spec) => {
+    const env: Record<string, string> = {}
+    // No BYO credentials slot exists for Gemini, so the host key is the only
+    // source, and only while the run allows host fallback (supports() refuses
+    // a run that turns it off).
+    // The key is passed explicitly rather than through inheritEnvPrefixes,
+    // which filters credential-looking names (*KEY*, *TOKEN*, *SECRET*).
+    const key = process.env.GEMINI_API_KEY
+    if (key && spec.provider.envFallback !== false) env.GEMINI_API_KEY = key
+    return env
+  },
 }
