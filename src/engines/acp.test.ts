@@ -230,6 +230,30 @@ describe("OPENCODE_AGENT spec", () => {
     expect(parse(OPENCODE_AGENT.env(spec({ provider: { model: "openrouter/x/y" } })))).toEqual({
       model: "openrouter/x/y",
     })
+    // a provider-namespaced id stays on the run's provider: OpenRouter's
+    // `openai/gpt-4.1` must not become OpenCode's direct `openai` provider
+    expect(
+      parse(
+        OPENCODE_AGENT.env(
+          spec({ provider: { preferred: "openrouter", model: "openai/gpt-4.1" } }),
+        ),
+      ),
+    ).toEqual({ model: "openrouter/openai/gpt-4.1" })
+    expect(
+      parse(
+        OPENCODE_AGENT.env(
+          spec({ provider: { model: "openai/gpt-4.1", credentials: { openrouter: "sk-or" } } }),
+        ),
+      ),
+    ).toEqual({ model: "openrouter/openai/gpt-4.1" })
+    // ...and is not doubled when it already carries that provider
+    expect(
+      parse(
+        OPENCODE_AGENT.env(
+          spec({ provider: { preferred: "openrouter", model: "openrouter/openai/gpt-4.1" } }),
+        ),
+      ),
+    ).toEqual({ model: "openrouter/openai/gpt-4.1" })
     // no model, no override: OpenCode's own config decides
     expect(OPENCODE_AGENT.env(spec()).OPENCODE_CONFIG_CONTENT).toBeUndefined()
   })

@@ -419,29 +419,32 @@ const OPENCODE_PROVIDERS = ["anthropic", "openai", "openrouter"] as const
  * when the run names none. `opencode acp` takes no `--model` flag; the model is
  * the top-level `model` key of its config, which `OPENCODE_CONFIG_CONTENT`
  * supplies inline as the highest-precedence runtime override
- * (https://opencode.ai/docs/config). A bare model name takes its provider from
- * `provider.preferred`, else from the first BYO key in anthropic/openai/
- * openrouter order (the kernel's usual pick). A bare name with neither is
- * refused: OpenCode would resolve it against its own default provider, and that
- * is a different model selection than the caller asked for.
+ * (https://opencode.ai/docs/config). OpenCode reads the first `/` segment as
+ * its provider id, so the run's provider is resolved FIRST (`provider.preferred`,
+ * else the first BYO key in anthropic/openai/openrouter order, the kernel's
+ * usual pick) and prefixed unless the model already carries it. That keeps a
+ * provider-namespaced id such as OpenRouter's `openai/gpt-4.1` on OpenRouter
+ * (`openrouter/openai/gpt-4.1`) instead of letting OpenCode read `openai` as
+ * the provider. With no resolvable provider, an already-qualified
+ * `<provider>/<model>` passes through for OpenCode's own config to serve, and a
+ * bare name is refused: OpenCode would resolve it against its own default
+ * provider, a different selection than the caller asked for.
  */
 export function opencodeModel(spec: RunSpec): string | undefined {
   const model = spec.provider.model?.trim()
   if (!model) return undefined
-  if (model.includes("/")) return model
   const preferred = spec.provider.preferred?.trim()
   const provider =
     preferred && (OPENCODE_PROVIDERS as readonly string[]).includes(preferred)
       ? preferred
       : OPENCODE_PROVIDERS.find((id) => Boolean(spec.provider.credentials?.[id]))
-  if (!provider) {
-    throw new Error(
-      `opencode: cannot honour model "${model}" without a provider — set provider.preferred ` +
-        `(anthropic, openai or openrouter), supply that provider's credential, or name the ` +
-        `model as "<provider>/<model>"`,
-    )
-  }
-  return `${provider}/${model}`
+  if (provider) return model.startsWith(`${provider}/`) ? model : `${provider}/${model}`
+  if (model.includes("/")) return model
+  throw new Error(
+    `opencode: cannot honour model "${model}" without a provider — set provider.preferred ` +
+      `(anthropic, openai or openrouter), supply that provider's credential, or name the ` +
+      `model as "<provider>/<model>"`,
+  )
 }
 
 export const OPENCODE_AGENT: AcpAgentSpec = {
