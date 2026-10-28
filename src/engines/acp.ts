@@ -462,7 +462,9 @@ export function inheritedOpencodeConfig(
   if (!raw || raw.trim() === "") return {}
   let parsed: unknown
   try {
-    parsed = JSON.parse(raw)
+    // OpenCode config is JSONC (https://opencode.ai/docs/config/#format):
+    // comments and trailing commas are valid there and must not fail here.
+    parsed = JSON.parse(stripJsonc(raw))
   } catch (err) {
     throw new Error(
       `opencode: host OPENCODE_CONFIG_CONTENT is not valid JSON (${(err as Error).message})`,
@@ -473,6 +475,63 @@ export function inheritedOpencodeConfig(
     throw new Error("opencode: host OPENCODE_CONFIG_CONTENT must be a JSON object")
   }
   return parsed as Record<string, unknown>
+}
+
+/**
+ * JSONC → JSON: drops line comments, block comments and trailing commas
+ * outside string literals, so `JSON.parse` accepts what OpenCode accepts.
+ * Strings are walked with their escapes, so a `//` or `,}` inside a value
+ * survives.
+ */
+export function stripJsonc(text: string): string {
+  let out = ""
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]!
+    if (ch === '"') {
+      // copy the string literal verbatim, honouring escapes
+      let j = i + 1
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1
+      out += text.slice(i, j + 1)
+      i = j + 1
+      continue
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      const end = text.indexOf("\n", i)
+      i = end === -1 ? text.length : end
+      continue
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2)
+      i = end === -1 ? text.length : end + 2
+      continue
+    }
+    if (ch === ",") {
+      // a comma followed only by whitespace/comments and then `}` or `]` is trailing
+      let j = i + 1
+      for (;;) {
+        while (j < text.length && /\s/.test(text[j]!)) j++
+        if (text[j] === "/" && text[j + 1] === "/") {
+          const end = text.indexOf("\n", j)
+          j = end === -1 ? text.length : end
+          continue
+        }
+        if (text[j] === "/" && text[j + 1] === "*") {
+          const end = text.indexOf("*/", j + 2)
+          j = end === -1 ? text.length : end + 2
+          continue
+        }
+        break
+      }
+      if (text[j] === "}" || text[j] === "]") {
+        i += 1
+        continue
+      }
+    }
+    out += ch
+    i += 1
+  }
+  return out
 }
 
 export const OPENCODE_AGENT: AcpAgentSpec = {

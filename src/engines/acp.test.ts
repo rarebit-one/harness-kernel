@@ -272,6 +272,22 @@ describe("OPENCODE_AGENT spec", () => {
       })
       // No model requested: the host's inline config is left to inherit untouched.
       expect(OPENCODE_AGENT.env(spec()).OPENCODE_CONFIG_CONTENT).toBeUndefined()
+      // OpenCode config is JSONC: comments and trailing commas are kept legal.
+      process.env.OPENCODE_CONFIG_CONTENT = `{
+        // the proxy for openai
+        "provider": { "openai": { "options": { "baseURL": "http://proxy.internal/v1", /* note */ } }, },
+        "instructions": ["see https://example.com/rules // not a comment", "a,}b"],
+      }`
+      expect(
+        JSON.parse(
+          OPENCODE_AGENT.env(spec({ provider: { preferred: "openai", model: "gpt-5" } }))
+            .OPENCODE_CONFIG_CONTENT ?? "null",
+        ),
+      ).toEqual({
+        provider: { openai: { options: { baseURL: "http://proxy.internal/v1" } } },
+        instructions: ["see https://example.com/rules // not a comment", "a,}b"],
+        model: "openai/gpt-5",
+      })
       // A host value that is not a JSON object is refused with a clear message.
       process.env.OPENCODE_CONFIG_CONTENT = "{not json"
       expect(() =>
