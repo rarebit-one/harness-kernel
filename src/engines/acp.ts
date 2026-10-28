@@ -411,6 +411,39 @@ function withoutCredentials(spec: RunSpec): RunSpec {
  * Provider keys: ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY
  * Docs: https://opencode.ai/docs/acp
  */
+/** OpenCode provider ids for the kernel's three routable providers. */
+const OPENCODE_PROVIDERS = ["anthropic", "openai", "openrouter"] as const
+
+/**
+ * The run's requested model in OpenCode's `provider/model` form, or undefined
+ * when the run names none. `opencode acp` takes no `--model` flag; the model is
+ * the top-level `model` key of its config, which `OPENCODE_CONFIG_CONTENT`
+ * supplies inline as the highest-precedence runtime override
+ * (https://opencode.ai/docs/config). A bare model name takes its provider from
+ * `provider.preferred`, else from the first BYO key in anthropic/openai/
+ * openrouter order (the kernel's usual pick). A bare name with neither is
+ * refused: OpenCode would resolve it against its own default provider, and that
+ * is a different model selection than the caller asked for.
+ */
+export function opencodeModel(spec: RunSpec): string | undefined {
+  const model = spec.provider.model?.trim()
+  if (!model) return undefined
+  if (model.includes("/")) return model
+  const preferred = spec.provider.preferred?.trim()
+  const provider =
+    preferred && (OPENCODE_PROVIDERS as readonly string[]).includes(preferred)
+      ? preferred
+      : OPENCODE_PROVIDERS.find((id) => Boolean(spec.provider.credentials?.[id]))
+  if (!provider) {
+    throw new Error(
+      `opencode: cannot honour model "${model}" without a provider — set provider.preferred ` +
+        `(anthropic, openai or openrouter), supply that provider's credential, or name the ` +
+        `model as "<provider>/<model>"`,
+    )
+  }
+  return `${provider}/${model}`
+}
+
 export const OPENCODE_AGENT: AcpAgentSpec = {
   name: "opencode",
   enableEnv: "RUNNER_ENABLE_OPENCODE",
@@ -431,6 +464,11 @@ export const OPENCODE_AGENT: AcpAgentSpec = {
     if (creds?.anthropic) env.ANTHROPIC_API_KEY = creds.anthropic
     if (creds?.openai) env.OPENAI_API_KEY = creds.openai
     if (creds?.openrouter) env.OPENROUTER_API_KEY = creds.openrouter
+    // The requested model rides on OpenCode's inline config override. The
+    // same channel is where gateway routes (`provider.<id>.options.baseURL`)
+    // would go once gateway runs are supported.
+    const model = opencodeModel(spec)
+    if (model) env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model })
     return env
   },
 }

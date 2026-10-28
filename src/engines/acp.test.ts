@@ -209,6 +209,40 @@ describe("OPENCODE_AGENT spec", () => {
     expect(env.OPENROUTER_API_KEY).toBe("sk-or")
   })
 
+  it("passes the requested model through OpenCode's inline config override", () => {
+    const parse = (env: Record<string, string>) =>
+      JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? "null") as { model?: string } | null
+    // provider.preferred names the provider for a bare model name
+    expect(
+      parse(
+        OPENCODE_AGENT.env(
+          spec({ provider: { preferred: "anthropic", model: "claude-sonnet-5-5" } }),
+        ),
+      ),
+    ).toEqual({ model: "anthropic/claude-sonnet-5-5" })
+    // else the first BYO key, in anthropic/openai/openrouter order
+    expect(
+      parse(
+        OPENCODE_AGENT.env(spec({ provider: { model: "gpt-5", credentials: { openai: "sk-o" } } })),
+      ),
+    ).toEqual({ model: "openai/gpt-5" })
+    // an explicit provider/model passes through untouched
+    expect(parse(OPENCODE_AGENT.env(spec({ provider: { model: "openrouter/x/y" } })))).toEqual({
+      model: "openrouter/x/y",
+    })
+    // no model, no override: OpenCode's own config decides
+    expect(OPENCODE_AGENT.env(spec()).OPENCODE_CONFIG_CONTENT).toBeUndefined()
+  })
+
+  it("refuses a bare model name it cannot attribute to a provider", () => {
+    expect(() => OPENCODE_AGENT.env(spec({ provider: { model: "mystery-1" } }))).toThrow(
+      /cannot honour model "mystery-1"/,
+    )
+    expect(() =>
+      OPENCODE_AGENT.env(spec({ provider: { preferred: "local", model: "mystery-1" } })),
+    ).toThrow(/cannot honour model/)
+  })
+
   it("passes no keys when credentials are absent", () => {
     const env = OPENCODE_AGENT.env(spec())
     expect(Object.keys(env).filter((k) => k.endsWith("_API_KEY"))).toHaveLength(0)

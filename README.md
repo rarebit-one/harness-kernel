@@ -535,7 +535,11 @@ AcpEngine(spec, capabilityServerScript)` for custom configuration.
 and `EVE_*` config are native-only.
 
 **`opencode` (`opencode acp`)** — BYO Anthropic / OpenAI / OpenRouter keys from
-`spec.provider.credentials`. Gateway runs are refused for now: OpenCode takes
+`spec.provider.credentials`. `spec.provider.model` is passed as OpenCode's
+`model` (`provider/model`) through the `OPENCODE_CONFIG_CONTENT` inline config
+override; a bare model name takes its provider from `provider.preferred`, else
+from the first BYO key, and is refused when neither names one. Gateway runs are
+refused for now: OpenCode takes
 provider endpoints from `provider.<id>.options.baseURL` in its own config, not
 from the `*_BASE_URL` env the gateway sets, so a gateway run would send the run
 token to the public endpoint. The remaining 70+
