@@ -447,6 +447,34 @@ export function opencodeModel(spec: RunSpec): string | undefined {
   )
 }
 
+/**
+ * The host's inline OpenCode config (`OPENCODE_CONFIG_CONTENT`, which the
+ * `OPENCODE_` inherit prefix lets through), parsed so a run's model override
+ * can be merged INTO it rather than replace it: a runner that supplies
+ * provider endpoints or custom providers that way must keep them when a run
+ * also names a model. Absent means `{}`. Anything but a JSON object is refused
+ * here with a clear message, since OpenCode would reject it at startup anyway.
+ */
+export function inheritedOpencodeConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  const raw = env.OPENCODE_CONFIG_CONTENT
+  if (!raw || raw.trim() === "") return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (err) {
+    throw new Error(
+      `opencode: host OPENCODE_CONFIG_CONTENT is not valid JSON (${(err as Error).message})`,
+      { cause: err },
+    )
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("opencode: host OPENCODE_CONFIG_CONTENT must be a JSON object")
+  }
+  return parsed as Record<string, unknown>
+}
+
 export const OPENCODE_AGENT: AcpAgentSpec = {
   name: "opencode",
   enableEnv: "RUNNER_ENABLE_OPENCODE",
@@ -467,11 +495,14 @@ export const OPENCODE_AGENT: AcpAgentSpec = {
     if (creds?.anthropic) env.ANTHROPIC_API_KEY = creds.anthropic
     if (creds?.openai) env.OPENAI_API_KEY = creds.openai
     if (creds?.openrouter) env.OPENROUTER_API_KEY = creds.openrouter
-    // The requested model rides on OpenCode's inline config override. The
-    // same channel is where gateway routes (`provider.<id>.options.baseURL`)
-    // would go once gateway runs are supported.
+    // The requested model rides on OpenCode's inline config override, merged
+    // into whatever inline config the host already supplies (provider
+    // endpoints, custom providers), which `childEnv` would otherwise see
+    // replaced by this value. The same channel is where gateway routes
+    // (`provider.<id>.options.baseURL`) would go once gateway runs are
+    // supported.
     const model = opencodeModel(spec)
-    if (model) env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model })
+    if (model) env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ ...inheritedOpencodeConfig(), model })
     return env
   },
 }

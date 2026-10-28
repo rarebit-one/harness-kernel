@@ -258,6 +258,35 @@ describe("OPENCODE_AGENT spec", () => {
     expect(OPENCODE_AGENT.env(spec()).OPENCODE_CONFIG_CONTENT).toBeUndefined()
   })
 
+  it("merges the model into the host's inline OpenCode config instead of replacing it", () => {
+    const saved = process.env.OPENCODE_CONFIG_CONTENT
+    try {
+      process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+        model: "openai/old",
+        provider: { openai: { options: { baseURL: "http://proxy.internal/v1" } } },
+      })
+      const env = OPENCODE_AGENT.env(spec({ provider: { preferred: "openai", model: "gpt-5" } }))
+      expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? "null")).toEqual({
+        model: "openai/gpt-5",
+        provider: { openai: { options: { baseURL: "http://proxy.internal/v1" } } },
+      })
+      // No model requested: the host's inline config is left to inherit untouched.
+      expect(OPENCODE_AGENT.env(spec()).OPENCODE_CONFIG_CONTENT).toBeUndefined()
+      // A host value that is not a JSON object is refused with a clear message.
+      process.env.OPENCODE_CONFIG_CONTENT = "{not json"
+      expect(() =>
+        OPENCODE_AGENT.env(spec({ provider: { preferred: "openai", model: "gpt-5" } })),
+      ).toThrow(/OPENCODE_CONFIG_CONTENT is not valid JSON/)
+      process.env.OPENCODE_CONFIG_CONTENT = "[1]"
+      expect(() =>
+        OPENCODE_AGENT.env(spec({ provider: { preferred: "openai", model: "gpt-5" } })),
+      ).toThrow(/must be a JSON object/)
+    } finally {
+      if (saved === undefined) delete process.env.OPENCODE_CONFIG_CONTENT
+      else process.env.OPENCODE_CONFIG_CONTENT = saved
+    }
+  })
+
   it("refuses a bare model name it cannot attribute to a provider", () => {
     expect(() => OPENCODE_AGENT.env(spec({ provider: { model: "mystery-1" } }))).toThrow(
       /cannot honour model "mystery-1"/,

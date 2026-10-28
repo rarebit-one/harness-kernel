@@ -537,7 +537,7 @@ and `EVE_*` config are native-only.
 **`opencode` (`opencode acp`)** — BYO Anthropic / OpenAI / OpenRouter keys from
 `spec.provider.credentials`. `spec.provider.model` is passed as OpenCode's
 `model` (`provider/model`) through the `OPENCODE_CONFIG_CONTENT` inline config
-override. The run's provider (`provider.preferred`, else the first BYO key) is
+override, merged into any inline config the host already supplies there. The run's provider (`provider.preferred`, else the first BYO key) is
 prefixed unless the model already carries it, so OpenRouter's namespaced
 `openai/gpt-4.1` stays `openrouter/openai/gpt-4.1`; a bare model name with no
 resolvable provider is refused. Gateway runs are
