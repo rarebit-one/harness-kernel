@@ -243,6 +243,14 @@ export { ClaudeCodeEngine } from "./engines/claudeCode.js"
 export type { ClaudeCodeOptions, ClaudeCodeDriver } from "./engines/claudeCode.js"
 export { CodexEngine } from "./engines/codex.js"
 export type { CodexOptions, CodexDriver } from "./engines/codex.js"
+export { AcpEngine, EVE_AGENT, OPENCODE_AGENT, GEMINI_AGENT } from "./engines/acp.js"
+export type {
+  AcpAgentSpec,
+  AcpOptions,
+  AcpDriver,
+  AcpOutcome,
+  AcpClientEvents,
+} from "./engines/acp.js"
 // The run's environment (instructions, instruction files, skills, inline
 // sources): the caller materializes the workdir half; each engine compiles the
 // rest into its own harness's configuration.

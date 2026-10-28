@@ -25,7 +25,7 @@ around — the kernel never bends to a consumer.
 | `src/events.ts` | `RunEvent` + `runEventEmitter` / `recordRunEvents` — the structured run stream the loop and `EngineContext` emit |
 | `src/tools/` | `Tool` + `primitiveTools` (generic) / `connectorTools`; `metadata.ts` (scoping + projections); `modelTool.ts` (a model surfaced as a tool). Domain tools are the application's, injected via `DomainToolFactory`. |
 | `src/primitives/` | Sandbox primitives: `codeExec`, `fs`, `http`, `download` |
-| `src/engines/` | The `AgentEngine` seam + native / claude-code / codex / ACP (eve) harnesses; the capability *mechanism* (guards, `write_file`, MCP + stdio transports) — never an application's capability set |
+| `src/engines/` | The `AgentEngine` seam + native / claude-code / codex / ACP (eve, opencode, gemini) harnesses; the capability *mechanism* (guards, `write_file`, MCP + stdio transports) — never an application's capability set |
 | `src/private.ts` | `privateRunChannels` / `PrivateRunError` — what `RunSpec.private` narrows the run's `log` and event sink to (phase codes only) |
 | `src/signals.ts` | Internal: the caller's cancel merged with a wall-clock deadline (`deadlineSignal`, `runStop`), and the harness-ending → `RunOutcome` map |
 | `src/secrets.ts` | `secretsToEnv` |
@@ -41,7 +41,7 @@ a tool, or a control loop.
 | 1 | **Model kinds** | `ModelRegistry` | binds `kind`+`id` → `ModelInvocation`; fails loud when unresolved |
 | 2 | **Route resolution** | `RouteResolver` | `StaticRouteResolver` (code/config, zero infrastructure) |
 | 3 | **Middleware** | `Middleware` | correlation, logging, health tracking, error redaction |
-| 4 | **Engines** | `AgentEngine` | native / claude-code / codex / ACP (`eve`, selected via `selectEngine`); `EngineContext.signal` cancels, `EngineResult.outcome` reports why it stopped |
+| 4 | **Engines** | `AgentEngine` | native / claude-code / codex / ACP (`eve`, `opencode`, `gemini`, selected via `selectEngine`); `EngineContext.signal` cancels, `EngineResult.outcome` reports why it stopped |
 | 5 | **Context providers** | `ContextProvider` | parallel assembly + rendering; wired into `NativeEngine` |
 | 6 | **Tools** | `Tool` + `ToolMetadata` | primitives, MCP connectors, projections (incl. `replaySafeTools`), `modelAsTool`, `terminalTool`; `ToolMetadata.dispatch` (`execute` / `terminal` / `external`) is the one field the loop acts on; each call gets a `ToolContext` (`signal`, `callId`, `runId?`); domain tools + capabilities are injected |
 | 7 | **Loop** | `Loop` | `nativeLoop` — the one loop the kernel ships, which `runAgent` and `runConversation` also run; takes seeded `messages`, returns the transcript, `stopReason`, summed `usage` and the served `provider`/`model`; `LoopContext.signal` cancels it |

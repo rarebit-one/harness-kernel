@@ -43,6 +43,34 @@ describe("selectEngine", () => {
   it("refuses codex without a capability script rather than serving an empty surface", () => {
     expect(() => selectEngine("codex")).toThrow(/capabilityServerScript/)
   })
+
+  it("resolves the eve engine by name when given a capability script", () => {
+    expect(selectEngine("eve", { capabilityServerScript: "/opt/app/caps.js" }).name).toBe("eve")
+  })
+
+  it("refuses eve without a capability script", () => {
+    expect(() => selectEngine("eve")).toThrow(/capabilityServerScript/)
+  })
+
+  it("resolves the opencode engine by name when given a capability script", () => {
+    expect(selectEngine("opencode", { capabilityServerScript: "/opt/app/caps.js" }).name).toBe(
+      "opencode",
+    )
+  })
+
+  it("refuses opencode without a capability script", () => {
+    expect(() => selectEngine("opencode")).toThrow(/capabilityServerScript/)
+  })
+
+  it("resolves the gemini engine by name when given a capability script", () => {
+    expect(selectEngine("gemini", { capabilityServerScript: "/opt/app/caps.js" }).name).toBe(
+      "gemini",
+    )
+  })
+
+  it("refuses gemini without a capability script", () => {
+    expect(() => selectEngine("gemini")).toThrow(/capabilityServerScript/)
+  })
 })
 
 describe("NativeEngine.supports", () => {

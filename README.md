@@ -52,7 +52,7 @@ ESM-only, Node >= 22.
 | **Run events** | `RunEvent` — an ordered, structured account of a run (turns, tool calls, budgets, outcome), emitted to an optional sink |
 | **Tools** | `Tool` (+ `ToolContext`), `primitiveTools()` (`run_code`, `read_file`, `list_files`, `http_fetch`), `connectorTools()`, `modelAsTool()`, metadata + projections (`replaySafeTools`, …) |
 | **Connectors** | `connectMcp()` — MCP clients over stdio / streamable HTTP / SSE |
-| **Engines** | The `AgentEngine` seam + `native`, `claude-code`, `codex`, and ACP (`eve`) harnesses, plus the capability *mechanism* (scope guards, a generic `write_file`, and MCP/stdio transports) — the capability *set* is yours to inject |
+| **Engines** | The `AgentEngine` seam + `native`, `claude-code`, `codex`, and ACP (`eve`, `opencode`, `gemini`) harnesses, plus the capability *mechanism* (scope guards, a generic `write_file`, and MCP/stdio transports) — the capability *set* is yours to inject |
 | **Routing** | `RouteResolver` + `StaticRouteResolver` — capability → model, prompt, tools |
 | **Context** | `ContextProvider` chain, assembled in parallel and rendered into the prompt |
 | **Secrets** | `secretsToEnv()` — resolved secret values into an exec environment |
@@ -101,8 +101,8 @@ const model = registry.resolve(route.model) // the resolver picks, the registry 
 const model = withMiddleware(anyModel, [correlationMiddleware(), loggingMiddleware()])
 ```
 
-**4. Engines.** The `AgentEngine` seam — `native`, `claude-code`, `codex`, an
-ACP agent (`eve`), or your own. File mutations stay out of band.
+**4. Engines.** The `AgentEngine` seam — `native`, `claude-code`, `codex`,
+ACP agents (`eve`, `opencode`, `gemini`), or your own. File mutations stay out of band.
 
 **5. Context providers.** Replace a single pre-baked context string with a
 chain, so a live source can inject fragments:
@@ -523,6 +523,41 @@ Behaviour that follows from this, since 0.10.0:
 - Claude Code subscription auth (`CLAUDE_CODE_OAUTH_TOKEN`) is not passed; use
   an API key.
 - An ACP agent no longer falls back to the host's provider keys.
+
+#### ACP agents: native-only features
+
+The ACP protocol carries MCP servers and a prompt; it does not carry every
+feature of the underlying CLI. Use the spec objects directly with `new
+AcpEngine(spec, capabilityServerScript)` for custom configuration.
+
+**`eve` (`eve acp`)** — BYO Anthropic / OpenAI / OpenRouter keys from
+`spec.provider.credentials`; all three have gateway routes. Interactive modes
+and `EVE_*` config are native-only.
+
+**`opencode` (`opencode acp`)** — BYO Anthropic / OpenAI / OpenRouter keys from
+`spec.provider.credentials`; all three have gateway routes. The remaining 70+
+providers OpenCode supports (Vertex AI, AWS Bedrock, GitHub Copilot, Snowflake,
+…) require OpenCode's own stored config (`~/.opencode/` or `OPENCODE_HOME`) and
+are native-only: there is no BYO credentials slot for them in `ProviderSelection`
+and no gateway route. The interactive TUI is also native-only.
+
+**`gemini` (`gemini --acp`)** — API-key auth only (`GEMINI_API_KEY` from the
+host env; there is no `ProviderSelection.credentials` slot for Gemini). The
+following authentication methods are **native-only** and cannot be used through
+this engine:
+
+- **Vertex AI** (`GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION`, or
+  `GOOGLE_API_KEY` in express mode) — the `GOOGLE_` inherit prefix passes those
+  vars through for non-gateway runs, but Vertex auth requires the CLI to perform
+  an ADC exchange that ACP mode may not complete without a terminal.
+- **OAuth / Login with Google** — interactive only.
+
+The kernel's credential gateway has **no route** for Gemini's provider
+(`GEMINI_API_KEY`). `supports()` refuses any run that carries `RunSpec.gateway`,
+rather than starting Gemini without credentials. Use a non-gateway run and set
+`GEMINI_API_KEY` on the runner host. Because that key belongs to the host, not
+the run, a run with `provider.envFallback: false` (a consumer that meters keys
+per layer) is refused too, and the key is never passed to it.
 
 ### Run environment
 
