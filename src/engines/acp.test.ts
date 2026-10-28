@@ -241,6 +241,39 @@ describe("GEMINI_AGENT spec", () => {
     expect(GEMINI_AGENT.args(spec())).toEqual(["--acp"])
   })
 
+  it("passes the run's requested model as --model", () => {
+    expect(GEMINI_AGENT.args(spec({ provider: { model: "gemini-2.5-pro" } }))).toEqual([
+      "--acp",
+      "--model",
+      "gemini-2.5-pro",
+    ])
+  })
+
+  it("inlines AGENTS.md into the prompt, since the CLI discovers GEMINI.md instead", async () => {
+    expect(GEMINI_AGENT.promptAgentsMd).toBe(true)
+    const workdir = await mkdtemp(path.join(tmpdir(), "acp-gemini-"))
+    try {
+      const drive = fakeDriver(async () => ({ stopReason: "end_turn" }))
+      const s = spec(
+        {
+          instructions: { agentsMd: "Root rule: never force-push." },
+          agentFiles: [{ path: "api/AGENTS.md", content: "API rule: keep handlers thin." }],
+        },
+        workdir,
+      )
+      await new AcpEngine(GEMINI_AGENT, SCRIPT, drive).run(s, recordingCtx())
+      expect(drive.captured?.prompt).toContain("Root rule: never force-push.")
+      expect(drive.captured?.prompt).toContain("## Instructions for `api/`")
+      expect(drive.captured?.prompt).toContain("API rule: keep handlers thin.")
+      // An agent that reads AGENTS.md itself (eve) gets neither inlined.
+      await new AcpEngine(EVE_AGENT, SCRIPT, drive).run(s, recordingCtx())
+      expect(drive.captured?.prompt).not.toContain("Root rule: never force-push.")
+      expect(drive.captured?.prompt).not.toContain("API rule: keep handlers thin.")
+    } finally {
+      await rm(workdir, { recursive: true, force: true })
+    }
+  })
+
   it("reads GEMINI_API_KEY from the host env (no BYO credentials slot)", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key"
     const env = GEMINI_AGENT.env(spec())

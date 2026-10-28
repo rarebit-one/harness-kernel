@@ -63,6 +63,15 @@ export interface AcpAgentSpec {
    * is built with `gatewayEnv` as usual.
    */
   readonly gatewaySupported?: boolean
+  /**
+   * When `true`, the agent does not discover the workdir's `AGENTS.md` files by
+   * itself (it reads another context file by default), so the root and scoped
+   * `AGENTS.md` contents are inlined into the prompt's instructions, the way
+   * the Claude Code engine appends them. Absent (or `false`) means the agent
+   * reads `AGENTS.md` from the workdir and only the system instructions and
+   * skills index lead the prompt.
+   */
+  readonly promptAgentsMd?: boolean
 }
 
 /**
@@ -247,10 +256,14 @@ export class AcpEngine implements AgentEngine {
       mcpServers: toAcpMcpServers(servers),
       // ACP's session/new has no system-prompt field, so the environment's
       // system instructions and skills index lead the task prompt; the agent
-      // reads the workdir's AGENTS.md (materialized by the caller) itself.
+      // reads the workdir's AGENTS.md (materialized by the caller) itself,
+      // unless its spec says it would not find it (`promptAgentsMd`).
       prompt: harnessPrompt(
         spec,
-        environmentInstructions(spec, { agentsMd: false, skillsIndex: true }),
+        environmentInstructions(spec, {
+          agentsMd: this.agent.promptAgentsMd === true,
+          skillsIndex: true,
+        }),
       ),
       ...(spec.limits?.maxDurationMs !== undefined
         ? { maxDurationMs: spec.limits.maxDurationMs }
@@ -438,8 +451,13 @@ export const GEMINI_AGENT: AcpAgentSpec = {
   name: "gemini",
   enableEnv: "RUNNER_ENABLE_GEMINI",
   command: "gemini",
-  // `--acp` is a flag on the `gemini` command, not a subcommand.
-  args: () => ["--acp"],
+  // `--acp` is a flag on the `gemini` command, not a subcommand. A requested
+  // model rides on `--model`, else the CLI's configured default applies.
+  args: (spec) => (spec.provider.model ? ["--acp", "--model", spec.provider.model] : ["--acp"]),
+  // Gemini CLI discovers `GEMINI.md`, not `AGENTS.md` (reading `AGENTS.md`
+  // needs its `context.fileName` setting), so the environment's root and
+  // scoped `AGENTS.md` are inlined into the prompt instead.
+  promptAgentsMd: true,
   // GEMINI_ covers GEMINI_CLI_HOME and other gemini config vars (non-credential).
   // GOOGLE_ covers Vertex AI config (GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION).
   // GEMINI_API_KEY is passed explicitly in env() below; the *KEY* filter in

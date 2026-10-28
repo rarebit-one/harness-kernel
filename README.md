@@ -545,7 +545,11 @@ are native-only: there is no BYO credentials slot for them in `ProviderSelection
 and no gateway route. The interactive TUI is also native-only.
 
 **`gemini` (`gemini --acp`)** — API-key auth only (`GEMINI_API_KEY` from the
-host env; there is no `ProviderSelection.credentials` slot for Gemini). The
+host env; there is no `ProviderSelection.credentials` slot for Gemini).
+`spec.provider.model` is passed as `--model`. Gemini CLI discovers `GEMINI.md`,
+not `AGENTS.md`, so the environment's root and scoped `AGENTS.md` are inlined
+into the prompt's instructions (as the Claude Code engine appends them) rather
+than relying on its `context.fileName` setting. The
 following authentication methods are **native-only** and cannot be used through
 this engine:
 
