@@ -93,6 +93,33 @@ describe("connectorTools", () => {
     expect(tools.map((t) => t.spec.name)).toEqual(["book_visit"])
   })
 
+  it("advertises only the tools a connector's allowlist names", async () => {
+    const conn: McpConnection = {
+      listTools: async () => ({
+        tools: [
+          { name: "read_logs", inputSchema: { type: "object" } },
+          { name: "delete_project", inputSchema: { type: "object" } },
+        ],
+      }),
+      callTool: async () => ({}),
+      close: async () => {},
+    }
+    const config = {
+      name: "ops",
+      kind: "mcp" as const,
+      transport: "streamable_http" as const,
+      endpoint: "https://x",
+    }
+    const narrowed = await connectorTools([{ ...config, tools: ["read_logs"] }], async () => conn)
+    expect(narrowed.tools.map((t) => t.spec.name)).toEqual(["ops__read_logs"])
+
+    const none = await connectorTools([{ ...config, tools: [] }], async () => conn)
+    expect(none.tools).toEqual([])
+
+    const all = await connectorTools([config], async () => conn)
+    expect(all.tools.map((t) => t.spec.name)).toEqual(["ops__read_logs", "ops__delete_project"])
+  })
+
   it("ignores non-mcp connectors", async () => {
     const { tools } = await connectorTools([
       { name: "x", kind: "http", transport: "streamable_http", endpoint: "https://x" },

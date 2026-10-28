@@ -6,6 +6,7 @@ import type { ConnectorConfig } from "../types.js"
 import {
   connectorServers,
   connectorToMcpServer,
+  refuseConnectorToolFilter,
   writeCodexConfig,
   writeMcpJson,
 } from "./connectorMcp.js"
@@ -147,5 +148,27 @@ describe("writeCodexConfig", () => {
   it("returns null and writes nothing when there are no servers", async () => {
     expect(await writeCodexConfig(codexHome, {})).toBeNull()
     await expect(readFile(path.join(codexHome, "config.toml"), "utf8")).rejects.toThrow()
+  })
+})
+
+describe("refuseConnectorToolFilter", () => {
+  const mcp = {
+    name: "ops",
+    kind: "mcp" as const,
+    transport: "streamable_http" as const,
+    endpoint: "https://x",
+  }
+
+  it("lets a run through when no connector narrows its tools", () => {
+    expect(refuseConnectorToolFilter("codex", { connectors: [mcp] })).toBeUndefined()
+    expect(refuseConnectorToolFilter("codex", {})).toBeUndefined()
+  })
+
+  it("refuses a run whose connector names a tool allowlist, even an empty one", () => {
+    for (const tools of [["read_logs"], []]) {
+      const refusal = refuseConnectorToolFilter("codex", { connectors: [{ ...mcp, tools }] })
+      expect(refusal?.ok).toBe(false)
+      expect(refusal?.reason).toContain("ops")
+    }
   })
 })

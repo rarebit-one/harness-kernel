@@ -256,7 +256,11 @@ export async function connectorTools(
         tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>
       }
 
+      // `config.tools` narrows the server's catalog: a tool left out is never
+      // advertised to the model, so it cannot be called either.
+      const allowed = config.tools
       for (const tool of listed.tools ?? []) {
+        if (allowed && !allowed.includes(tool.name)) continue
         tools.push({
           spec: {
             name: nameFor(config.name, tool.name),

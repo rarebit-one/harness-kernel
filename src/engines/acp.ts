@@ -8,7 +8,11 @@ import type { RunOutcome } from "../events.js"
 import type { StoppedBy } from "../signals.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { CAPABILITY_SERVER_NAME } from "./capabilityMcp.js"
-import { connectorServers, type SerializableMcpServer } from "./connectorMcp.js"
+import {
+  connectorServers,
+  refuseConnectorToolFilter,
+  type SerializableMcpServer,
+} from "./connectorMcp.js"
 import { readEmissions } from "./capabilityEmissions.js"
 import { defaultAcpDriver } from "./acpDriver.js"
 import { harnessPrompt } from "./harnessPrompt.js"
@@ -203,6 +207,7 @@ export class AcpEngine implements AgentEngine {
     return (
       refuseUnisolated(this.name, spec) ??
       refuseBadGateway(this.name, spec) ??
+      refuseConnectorToolFilter(this.name, spec) ??
       refuseCredentialsInVm(this.name, spec, this.agent.hostKeyEnvs ?? []) ?? { ok: true }
     )
   }

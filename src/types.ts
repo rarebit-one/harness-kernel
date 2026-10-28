@@ -23,6 +23,14 @@ export interface ConnectorConfig {
   args?: string[]
   /** Token is already resolved by the caller; the kernel treats it as opaque. */
   auth?: { type: "bearer" | "none"; token?: string }
+  /**
+   * The server's own tool names (not namespaced) this run may see and call.
+   * Absent means every tool the server lists; `[]` means none. A credential
+   * usually reaches further than one run needs, so this narrows what the model
+   * is shown as well as what it can invoke. An engine that cannot enforce it
+   * refuses the run in `supports()` rather than ignore it.
+   */
+  tools?: string[]
 }
 
 /**
