@@ -178,6 +178,23 @@ describe("ClaudeCodeEngine.run", () => {
         spec({ isolation: "container", workflow: { runner: { profile: "ephemeral" } } }),
       ),
     ).toEqual({ ok: true })
+    // A connector tool allowlist would be ignored by a whole-server mount, so it refuses.
+    const narrowed = engine.supports(
+      spec({
+        isolation: "container",
+        workflow: { runner: { profile: "ephemeral" } },
+        connectors: [
+          {
+            name: "ops",
+            kind: "mcp",
+            transport: "streamable_http",
+            endpoint: "https://x",
+            tools: [],
+          },
+        ],
+      }),
+    )
+    expect(narrowed.ok).toBe(false)
     delete process.env.RUNNER_ISOLATION
   })
 })

@@ -61,6 +61,27 @@ export function connectorToMcpServer(config: ConnectorConfig): SerializableMcpSe
 }
 
 /**
+ * The `supports()` refusal an out-of-process engine gives a run whose
+ * connectors narrow their tools (`ConnectorConfig.tools`), or `undefined` when
+ * none do. These engines mount a connector as a whole server, so the harness
+ * would see and could call every tool the server lists: running anyway would
+ * quietly widen what the caller allowed.
+ */
+export function refuseConnectorToolFilter(
+  engine: string,
+  spec: { connectors?: ConnectorConfig[] },
+): { ok: false; reason: string } | undefined {
+  const narrowed = (spec.connectors ?? []).filter((c) => c.kind === "mcp" && c.tools !== undefined)
+  if (narrowed.length === 0) return undefined
+  return {
+    ok: false,
+    reason:
+      `${engine} engine cannot limit a connector to some of its tools ` +
+      `(${narrowed.map((c) => c.name).join(", ")} set tools); use the native engine or drop the list`,
+  }
+}
+
+/**
  * Build the `<name> → server config` map for a run's MCP connectors, skipping any
  * that don't translate. Suitable both for the Agent SDK's `mcpServers` option and
  * for a `.mcp.json` file's `mcpServers` field.

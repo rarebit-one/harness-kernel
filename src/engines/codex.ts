@@ -7,7 +7,12 @@ import type { RunOutcome } from "../events.js"
 import { harnessOutcome, type StoppedBy } from "../signals.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { CAPABILITY_SERVER_NAME } from "./capabilityMcp.js"
-import { connectorServers, writeCodexConfig, type SerializableMcpServer } from "./connectorMcp.js"
+import {
+  connectorServers,
+  refuseConnectorToolFilter,
+  writeCodexConfig,
+  type SerializableMcpServer,
+} from "./connectorMcp.js"
 import { readEmissions } from "./capabilityEmissions.js"
 import { defaultCodexDriver } from "./codexDriver.js"
 import { harnessPrompt } from "./harnessPrompt.js"
@@ -125,6 +130,7 @@ export class CodexEngine implements AgentEngine {
     return (
       refuseUnisolated("codex", spec) ??
       refuseBadGateway("codex", spec) ??
+      refuseConnectorToolFilter("codex", spec) ??
       refuseCredentialsInVm("codex", spec, ["OPENAI_API_KEY", "CODEX_API_KEY"]) ?? { ok: true }
     )
   }
