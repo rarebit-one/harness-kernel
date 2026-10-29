@@ -154,6 +154,7 @@ describe("runWithEvents", () => {
       maxDurationMs: 50,
       tools: ["act"],
     })
+    expect((events[0] as { toolSchemaBytes?: number }).toolSchemaBytes).toBeGreaterThan(0)
   })
 
   it("closes the stream when ANY loop throws, and rethrows untouched", async () => {

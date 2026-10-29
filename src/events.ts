@@ -108,6 +108,10 @@ export interface RunStartedEvent extends RunEventBase {
   maxSteps: number
   maxDurationMs: number
   tools: string[]
+  /** UTF-8 bytes of the tool specs (names, descriptions, input schemas) handed
+   *  to the model: the size of the catalog it reads on every turn. Absent from
+   *  an emitter that predates the field. */
+  toolSchemaBytes?: number
 }
 
 /** One assistant turn: its prose and the tool calls it requested. */

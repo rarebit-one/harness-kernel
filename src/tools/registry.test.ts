@@ -51,6 +51,20 @@ describe("primitiveTools", () => {
     expect(out.exitCode).toBe(0)
   })
 
+  it("tells the model why read_file returned no text", async () => {
+    const read = primitiveTools(dir, {}).find((t) => t.spec.name === "read_file")!
+    await writeFile(path.join(dir, "huge.log"), "y".repeat(70 * 1024))
+    await writeFile(path.join(dir, "pic.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]))
+
+    expect(await read.execute({ path: "missing.txt" })).toBe("(not found)")
+    expect(await read.execute({ path: "huge.log" })).toMatch(
+      /^\(not read: huge\.log is 71680 bytes, over the 65536-byte read_file limit; read part of it with run_code/,
+    )
+    expect(await read.execute({ path: "pic.png" })).toMatch(
+      /^\(not read: pic\.png is a binary file of 5 bytes/,
+    )
+  })
+
   it("filters by the permissions allowlist", () => {
     const names = primitiveTools(dir, {}, ["read_file"]).map((t) => t.spec.name)
     expect(names).toEqual(["read_file"])

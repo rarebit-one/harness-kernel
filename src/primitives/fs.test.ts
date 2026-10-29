@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { readFileSafe, listFiles } from "./fs.js"
+import { readFileSafe, readSandboxFile, listFiles } from "./fs.js"
 
 describe("fs primitives", () => {
   let dir: string
@@ -62,5 +62,37 @@ describe("readFileSafe TOCTOU hardening", () => {
     expect(await readFileSafe(dir, "big.txt", 100)).toBeNull()
     expect(await readFileSafe(dir, "big.txt", 1000)).toHaveLength(200)
     await rm(dir, { recursive: true, force: true })
+  })
+})
+
+describe("readSandboxFile", () => {
+  it("names why it returned no text", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "fs-read-"))
+    await writeFile(path.join(dir, "a.txt"), "alpha")
+    await writeFile(path.join(dir, "big.txt"), "x".repeat(200))
+    await writeFile(path.join(dir, "img.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x1a]))
+    await writeFile(path.join(dir, "latin1.csv"), Buffer.from([0x63, 0x61, 0x66, 0xe9]))
+    await mkdir(path.join(dir, "sub"))
+
+    expect(await readSandboxFile(dir, "a.txt")).toEqual({ kind: "text", text: "alpha" })
+    expect(await readSandboxFile(dir, "missing.txt")).toEqual({ kind: "missing" })
+    expect(await readSandboxFile(dir, "big.txt", 100)).toEqual({
+      kind: "too_large",
+      bytes: 200,
+      maxBytes: 100,
+    })
+    expect(await readSandboxFile(dir, "img.png")).toEqual({ kind: "binary", bytes: 6 })
+    expect(await readSandboxFile(dir, "latin1.csv")).toEqual({ kind: "binary", bytes: 4 })
+    expect(await readSandboxFile(dir, "sub")).toEqual({ kind: "directory" })
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it("reports a symlink escape as missing, revealing nothing about the target", async () => {
+    const box = await mkdtemp(path.join(tmpdir(), "fs-read-box-"))
+    const outside = await mkdtemp(path.join(tmpdir(), "fs-read-out-"))
+    await writeFile(path.join(outside, "secret.txt"), "x".repeat(500))
+    await symlink(path.join(outside, "secret.txt"), path.join(box, "link.txt"))
+
+    expect(await readSandboxFile(box, "link.txt", 100)).toEqual({ kind: "missing" })
   })
 })

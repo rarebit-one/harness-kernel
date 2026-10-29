@@ -217,6 +217,7 @@ export async function runWithEvents(
     maxSteps: req.limits.maxSteps,
     maxDurationMs: req.limits.maxDurationMs,
     tools: req.tools.map((t) => t.spec.name),
+    toolSchemaBytes: Buffer.byteLength(JSON.stringify(req.tools.map((t) => t.spec)), "utf8"),
   })
 
   let result: LoopResult
