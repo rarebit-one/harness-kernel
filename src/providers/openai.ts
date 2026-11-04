@@ -229,7 +229,8 @@ export type OpenAICompatibleBody =
  * `promptCache.key` onto `prompt_cache_key` (its caching is otherwise
  * automatic, so breakpoints have nothing to attach to); any other name (local
  * servers, custom endpoints) gets the plain dialect and rejects the
- * OpenRouter block.
+ * OpenRouter block. `dataCollection: "deny"` becomes `store: false` on OpenAI
+ * and `provider.data_collection` on OpenRouter.
  */
 export function openAICompatibleRequestBody(
   name: string,
@@ -283,6 +284,13 @@ export function openAICompatibleRequestBody(
     if (or.provider) body.provider = { ...or.provider }
     if (or.usage) body.usage = or.usage
     if (or.transforms) body.transforms = or.transforms
+  }
+  // The data-policy intent (see `DataCollection`). A deny wins over an
+  // explicit OpenRouter `allow`: the stricter of the two is the one a caller
+  // can rely on. Local servers and custom endpoints get nothing.
+  if (options?.dataCollection === "deny") {
+    if (name === OPENAI_ADAPTER) body.store = false
+    if (isOpenRouter) body.provider = { ...body.provider, data_collection: "deny" }
   }
   return body
 }

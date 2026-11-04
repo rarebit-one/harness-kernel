@@ -25,6 +25,7 @@ export type {
   ToolChoice,
   OpenRouterOptions,
   OpenRouterProviderPreferences,
+  DataCollection,
 } from "./providers/options.js"
 export type {
   Provider,

@@ -401,6 +401,7 @@ providerOptions: {
   toolChoice: { name: "reply" },         // "auto" | "required" | "none" | { name }; omitted on a tools-free call
   promptCache: { ttl: "1h" },            // system + tools + last message cached
   responseFormat: { type: "json_object" }, // OpenAI-compatible adapters only
+  dataCollection: "deny",                // ask the provider not to retain or train on the call
   openrouter: {                          // OpenRouter adapter only
     models: ["anthropic/claude-sonnet-4.5", "openai/gpt-4.1"], // fallbacks
     provider: { data_collection: "deny", zdr: true },         // data policy
@@ -417,6 +418,16 @@ messages as content parts, which the upstreams that cache (Anthropic, Gemini)
 honour. On **OpenAI** caching is automatic, so only `promptCache.key` does
 anything (it becomes `prompt_cache_key`). The `local` adapter accepts it and
 lets the server's own prefix cache do the work.
+
+`dataCollection: "deny"` asks the provider not to keep the call or train on
+it, through whatever per-request control its API has. On **OpenRouter** it
+becomes `provider.data_collection: "deny"` (winning over an explicit `allow` in
+the `openrouter` block; it does not add `zdr: true`, which narrows routing
+further and is the caller's to ask for). On **OpenAI** it becomes `store: false`.
+**Anthropic** has no per-request control, so nothing is sent: its commercial
+terms already exclude API traffic from training, and zero retention is an
+account-level agreement. The `local` adapter sends nothing either; the operator
+runs that server.
 
 Every result reports what served it: `ConverseResult.model` is the model id the
 response named (with a fallback list it can differ from the one requested),

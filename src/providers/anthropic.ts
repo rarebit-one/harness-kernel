@@ -171,7 +171,9 @@ export function anthropicUsage(
  * text block so it can carry one), the last tool definition, and the trailing
  * messages. A `responseFormat` or an `openrouter` block is rejected here: the
  * Messages API has neither, and honouring a structured answer means a terminal
- * tool with a schema, not a request flag.
+ * tool with a schema, not a request flag. `dataCollection` is accepted and
+ * sends nothing: the Messages API has no per-request retention or training
+ * control (see `DataCollection`).
  */
 export function anthropicRequestBody(
   model: string,
