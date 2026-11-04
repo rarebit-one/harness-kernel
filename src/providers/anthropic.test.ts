@@ -186,6 +186,15 @@ describe("anthropic provider options", () => {
     ).toBe(100)
   })
 
+  it("accepts dataCollection and sends nothing: the Messages API has no per-request control", () => {
+    const body = anthropicRequestBody(
+      "m",
+      request({ providerOptions: { dataCollection: "deny" } }),
+      100,
+    )
+    expect(body).toEqual(anthropicRequestBody("m", request(), 100))
+  })
+
   it("rejects options it cannot honour instead of dropping them", () => {
     expect(() =>
       anthropicRequestBody(

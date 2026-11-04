@@ -224,6 +224,38 @@ describe("openai provider options", () => {
     )
   })
 
+  it("maps dataCollection: deny onto store: false for OpenAI and sends nothing to a local server", () => {
+    const deny = request({ providerOptions: { dataCollection: "deny" } })
+    expect(openAICompatibleRequestBody("openai", "gpt", deny, 100).store).toBe(false)
+    expect(openAICompatibleRequestBody("openai", "gpt", request(), 100)).not.toHaveProperty("store")
+    const local = openAICompatibleRequestBody("local", "m", deny, 100)
+    expect(local).not.toHaveProperty("store")
+    expect(local).not.toHaveProperty("provider")
+  })
+
+  it("maps dataCollection: deny onto OpenRouter's provider.data_collection, over an explicit allow", () => {
+    const deny = openAICompatibleRequestBody(
+      "openrouter",
+      "m",
+      request({ providerOptions: { dataCollection: "deny" } }),
+      100,
+    )
+    expect(deny.provider).toEqual({ data_collection: "deny" })
+    expect(deny).not.toHaveProperty("store")
+    const merged = openAICompatibleRequestBody(
+      "openrouter",
+      "m",
+      request({
+        providerOptions: {
+          dataCollection: "deny",
+          openrouter: { provider: { data_collection: "allow", order: ["Anthropic"] } },
+        },
+      }),
+      100,
+    )
+    expect(merged.provider).toEqual({ data_collection: "deny", order: ["Anthropic"] })
+  })
+
   it("reports the model the response named and exposes the configured one", async () => {
     createMock.mockResolvedValueOnce({
       id: "chatcmpl-1",

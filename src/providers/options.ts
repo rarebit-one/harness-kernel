@@ -142,6 +142,30 @@ export interface OpenRouterOptions {
 }
 
 /**
+ * A neutral data-policy intent. `"deny"` means "don't keep this request or
+ * train on it", and each adapter maps it onto the per-request control its API
+ * offers:
+ *
+ *   - **OpenRouter:** `provider.data_collection: "deny"`, which excludes
+ *     upstreams that may store or train on prompts. It wins over an
+ *     `openrouter.provider.data_collection: "allow"` in the same call. It does
+ *     not imply `zdr: true`: that narrows routing further, so a caller asks for
+ *     it explicitly.
+ *   - **OpenAI:** `store: false`, so the completion is not kept for the
+ *     platform's stored-completions, evals or distillation features.
+ *   - **Anthropic:** the Messages API has no per-request retention or training
+ *     control, so the request carries nothing. Its commercial terms already
+ *     exclude API traffic from training; zero retention is an account-level
+ *     agreement, not a request flag.
+ *   - **`local` and custom OpenAI-compatible endpoints:** nothing is sent, as
+ *     the operator runs the server and its retention is theirs to set.
+ *
+ * Like `promptCache`, this is an intent every adapter honours as well as its
+ * API allows, so the adapters with no control accept it rather than throw.
+ */
+export type DataCollection = "deny"
+
+/**
  * Which tool the model must call. `auto` lets it choose (the provider
  * default), `required` forces some tool, `none` forbids tools, `{ name }`
  * forces that one (the last step of a terminal-tool flow). Every adapter
@@ -172,6 +196,12 @@ export interface ProviderOptions {
   responseFormat?: ResponseFormat
   /** OpenRouter-only routing options; any other adapter rejects them. */
   openrouter?: OpenRouterOptions
+  /**
+   * Data policy: `"deny"` asks the provider not to retain the request or train
+   * on it, through whatever per-request control its API has. See
+   * {@link DataCollection}.
+   */
+  dataCollection?: DataCollection
 }
 
 /**
