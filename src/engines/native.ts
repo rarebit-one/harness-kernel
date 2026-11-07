@@ -196,7 +196,11 @@ export class NativeEngine implements AgentEngine {
             // disk for read_file.
             environmentInstructions(spec, { agentsMd: true, skillsIndex: true }),
           ),
-          messages: [{ role: "user", text: buildUserPrompt(spec.workflow, context, spec.inputs) }],
+          // A seeded run continues a stored conversation; a fresh one starts
+          // from the task prompt. Never both: a seed already carries its task.
+          messages: spec.messages ?? [
+            { role: "user", text: buildUserPrompt(spec.workflow, context, spec.inputs) },
+          ],
           tools,
           limits: resolveLoopLimits(spec.limits),
           ...(spec.providerOptions ? { providerOptions: spec.providerOptions } : {}),
@@ -221,6 +225,9 @@ export class NativeEngine implements AgentEngine {
         provider: result.provider ?? model.id,
         ...(served !== undefined ? { model: served } : {}),
         ...(result.upstream !== undefined ? { upstream: result.upstream } : {}),
+        ...(result.messages !== undefined ? { messages: result.messages } : {}),
+        ...(result.pending && result.pending.length > 0 ? { pending: result.pending } : {}),
+        ...(result.consumed !== undefined ? { consumed: result.consumed } : {}),
       }
     } finally {
       // Connectors are only needed during the loop; close them here (the engine

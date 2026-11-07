@@ -153,6 +153,15 @@ export function privateRunChannels(
           input: {},
           ...undoFields(event),
         }
+      case "tool.pending":
+        return {
+          ...base(event),
+          type: event.type,
+          step: event.step,
+          callId: callId(event.callId),
+          name: toolName(event.name),
+          input: {},
+        }
       case "tool.succeeded":
         return {
           ...base(event),
@@ -204,7 +213,7 @@ export function privateRunChannels(
   }
 }
 
-const FAILURE_REASONS = ["threw", "unknown_tool", "aborted", "truncated"] as const
+const FAILURE_REASONS = ["threw", "unknown_tool", "aborted", "truncated", "rejected"] as const
 const FINISH_REASONS = ["stop", "tool_calls", "length", "content_filter", "unknown"] as const
 
 /** A known finish reason; anything else is dropped. */
@@ -212,7 +221,14 @@ function isFinishReason(value: unknown): value is FinishReason {
   return typeof value === "string" && (FINISH_REASONS as readonly string[]).includes(value)
 }
 const BUDGET_KINDS = ["steps", "duration"] as const
-const OUTCOMES = ["completed", "steps_exhausted", "timed_out", "canceled", "failed"] as const
+const OUTCOMES = [
+  "completed",
+  "steps_exhausted",
+  "timed_out",
+  "canceled",
+  "failed",
+  "suspended",
+] as const
 const STOP_REASONS = [
   "end_turn",
   "terminal_tool",
@@ -221,6 +237,7 @@ const STOP_REASONS = [
   "timed_out",
   "canceled",
   "failed",
+  "suspended",
 ] as const
 
 /** A known stop reason; anything else (a custom loop's own word) is dropped. */
@@ -291,6 +308,7 @@ function phaseLine(event: RunEvent): string {
     case "model.turn.failed":
       return `phase=${event.type} step=${event.step} during=${event.phase}`
     case "tool.called":
+    case "tool.pending":
     case "tool.succeeded":
       return `phase=${event.type} step=${event.step} tool=${event.name}`
     case "tool.failed":

@@ -159,6 +159,7 @@ import { runAgent, recordRunEvents } from "@rarebit-one/harness-kernel"
 const { sink, events } = recordRunEvents()
 await runAgent({ provider, system, userPrompt, tools, emit: sink })
 // events: run.started -> model.turn -> tool.called -> tool.succeeded -> ... -> run.finished
+//         (tool.pending when an external call is parked; the resumed run closes it)
 ```
 
 The **bookends** — `run.started` and `run.finished` — are emitted by
@@ -345,9 +346,11 @@ const result = await runConversation({
   providerOptions: { promptCache: {} },
 })
 
-result.stopReason // "end_turn" | "terminal_tool" | "steps_exhausted" | "timed_out" | "canceled"
+result.stopReason // "end_turn" | "terminal_tool" | "steps_exhausted" | "timed_out" | "canceled" | "suspended"
 result.terminal?.input // { text, quick_replies } when the model called `reply`
 result.messages // store this; seed the next turn with it
+result.pending // the external calls to execute when outcome is "suspended"
+result.consumed // { steps, durationMs, usage? } — what this run spent
 result.usage // summed over every model call
 result.provider, result.model // what actually served the run
 ```
@@ -383,10 +386,47 @@ bytes the model emitted (the OpenAI dialect keeps and replays them verbatim;
 Anthropic hands over an object and leaves it absent), and `ToolCall.meta` is an
 opaque per-call bag that rides through history for an adapter that needs it.
 
-`dispatch: "external"` is reserved for a tool the *caller* executes: the loop
-would return the pending call and resume when given its result. The native
-loop refuses it today (a custom `Loop` may honour it); native suspend/resume is
-a later release.
+A tool with `meta.dispatch: "external"` is one the **caller** executes: a
+permission prompt, a question to a person, a device read, a child job. The loop
+does not run it. It emits `tool.pending`, finishes the step's server-side calls,
+and ends the run with `outcome: "suspended"` and the parked calls on
+`result.pending` (each the model's call as emitted, `argumentsText` included).
+Nothing is held in the meantime: the kernel keeps no state between the two runs,
+so the process can end and a resume can happen on another host hours later.
+
+```ts
+const parked = await runConversation({ provider, system, messages, tools: [...tools, askHuman] })
+if (parked.outcome === "suspended") {
+  // store parked.messages, parked.pending and parked.consumed; later:
+  const results = parked.pending.map((call) => ({ toolCallId: call.id, content: answerFor(call) }))
+  // a declined call: { toolCallId, content: "declined by policy", isError: true, rejected: true }
+  const resumed = await runConversation({
+    provider,
+    system,
+    messages: withToolResults(parked.messages, results),
+    tools: [...tools, askHuman], // keep it: the model may ask again
+    ...remainingLimits({ maxSteps, maxDurationMs }, parked.consumed),
+  })
+}
+```
+
+A parked call carries `external: true` in the transcript, so the resumed run
+recognises it whatever tools it is given. `withToolResults` builds the resume seed (merging into the tool turn a mixed
+step already wrote, so one tool turn answers one assistant turn), and the loop
+refuses a seed that leaves any call of that turn unanswered. The resumed run
+closes each parked call in its own event stream, at step 0, as `tool.succeeded`
+or `tool.failed` with `reason: "rejected"`, so a consumer following the stream
+across both runs sees every `tool.pending` matched. `remainingLimits` carries
+the budget over, floored at one step and one minute so the first resumed step
+always runs; a resumed run is a continuation, not a fresh budget. A terminal
+answer or a stop in the same step ends the run instead, and the parked calls
+are answered as not run so the transcript stays whole.
+
+**Budget visibility.** `budgetVisible: true` (off by default) appends one
+ephemeral user line to every request, `[budget] N of M step(s) and Ss remain`,
+counting down. It is never written into `messages`, and it rides after the
+history so the cached prefix (system, tools, earlier turns) is untouched. The
+limits stay hard either way; the line only lets the model pace itself.
 
 ### Provider options and prompt caching
 

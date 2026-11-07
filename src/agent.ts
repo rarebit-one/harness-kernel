@@ -9,7 +9,9 @@ import {
 import {
   nativeLoop,
   runWithEvents,
+  type LoopConsumed,
   type LoopContext,
+  type LoopLimits,
   type LoopRequest,
   type LoopResult,
   type TerminalCall,
@@ -54,6 +56,12 @@ export interface LoopRunOptions {
    * than throwing. Defaults to `RUNNER_RUN_TIMEOUT_MS` if set, else 10min.
    */
   maxDurationMs?: number
+  /**
+   * Tell the model, on every step, how many steps and how much time remain.
+   * Off by default. Advisory only: the loop's limits stay hard. See
+   * `LoopLimits.budgetVisible`.
+   */
+  budgetVisible?: boolean
   /**
    * Cancels the run. On abort the in-flight model request and tool are
    * stopped, no summary call is made, and the run resolves (never rejects)
@@ -109,6 +117,14 @@ export interface ConversationResult {
   stopReason: StopReason
   /** The terminal-tool call that ended the run, when one did. Its `input` is the structured answer. */
   terminal?: TerminalCall
+  /**
+   * The external tool calls parked when `outcome` is `suspended`. Execute them,
+   * then resume with `withToolResults(messages, results)` as the next seed and
+   * `remainingLimits(limits, consumed)` as the budget.
+   */
+  pending?: ToolCall[]
+  /** What this run spent: steps, wall-clock ms and usage. */
+  consumed: LoopConsumed
   /** Which adapter served the run (`"anthropic"`, `"openrouter"`, `"mock"`, a custom model's id). */
   provider: string
   /** The model id the last response named, else the adapter's configured model. */
@@ -152,11 +168,51 @@ const FALLBACK_MAX_TOOL_RESULT_BYTES = 64 * 1024
 export function resolveLoopLimits(limits?: {
   maxSteps?: number | undefined
   maxDurationMs?: number | undefined
-}): { maxSteps: number; maxDurationMs: number } {
+  budgetVisible?: boolean | undefined
+}): LoopLimits {
   return {
     maxSteps: limits?.maxSteps ?? DEFAULT_MAX_STEPS,
     maxDurationMs: limits?.maxDurationMs ?? defaultMaxDurationMs(),
+    ...(limits?.budgetVisible ? { budgetVisible: true } : {}),
   }
+}
+
+/**
+ * The floor a resumed run keeps however much was spent: one step, so the
+ * parked call's result is always delivered and answered, and a minute of
+ * wall clock, enough for that one turn. A resumed run is a continuation, not
+ * a fresh run, but it is never a run that cannot take its first step.
+ */
+const RESUME_MIN_STEPS = 1
+const RESUME_MIN_DURATION_MS = 60 * 1000
+
+/**
+ * The budget left after a `suspended` run: the original limits minus what that
+ * run `consumed`, floored so the first resumed step always runs (the reserved-
+ * final-step rule). A caller resuming a conversation passes this as `limits`;
+ * resuming with the ORIGINAL limits would make every suspension a fresh budget.
+ */
+export function remainingLimits(limits: LoopLimits, consumed: LoopConsumed): LoopLimits {
+  return {
+    maxSteps: Math.max(RESUME_MIN_STEPS, limits.maxSteps - consumed.steps),
+    maxDurationMs: Math.max(RESUME_MIN_DURATION_MS, limits.maxDurationMs - consumed.durationMs),
+    ...(limits.budgetVisible ? { budgetVisible: true } : {}),
+  }
+}
+
+/**
+ * The seed for resuming a `suspended` run: `messages` with `results` answering
+ * the parked calls. When the suspended step also ran server-side tools, the
+ * transcript already ends with their results, and these are merged into that
+ * same tool turn rather than appended as a second one — every dialect wants
+ * one tool turn answering one assistant turn. Neither array is mutated.
+ */
+export function withToolResults(messages: AgentMessage[], results: ToolResult[]): AgentMessage[] {
+  const last = messages[messages.length - 1]
+  if (last?.role === "tool") {
+    return [...messages.slice(0, -1), { role: "tool", results: [...last.results, ...results] }]
+  }
+  return [...messages, { role: "tool", results: [...results] }]
 }
 
 /**
@@ -302,6 +358,65 @@ function assertSeed(messages: AgentMessage[]): void {
         "end it with a user message, or with the tool results the model is waiting for",
     )
   }
+  if (last.role === "tool") {
+    // A tool turn answers the assistant turn before it, call for call. A seed
+    // that answers only some of them (a resume that forgot a pending call) is
+    // refused here, where it costs nothing, rather than by the provider.
+    const prev = messages[messages.length - 2]
+    const asked = prev?.role === "assistant" ? prev.toolCalls.map((c) => c.id) : []
+    const answered = new Set(last.results.map((r) => r.toolCallId))
+    const missing = asked.filter((id) => !answered.has(id))
+    if (prev?.role !== "assistant" || missing.length > 0) {
+      throw new Error(
+        "conversation seed ends with tool results that do not answer the assistant turn before " +
+          `them${missing.length > 0 ? ` (unanswered call ids: ${missing.join(", ")})` : ""}; ` +
+          "a resumed run needs a result for every pending call, a rejection included",
+      )
+    }
+  }
+}
+
+/**
+ * The external calls a resumed seed answers: the tool turn at its tail, matched
+ * against the assistant turn before it, for the calls the loop parked. A parked
+ * call carries `external: true` in the transcript, so this does not depend on
+ * which tools the resumed run was given: a caller that dropped the external
+ * tool still sees the call closed, and a server-side tool it dropped is not
+ * mistaken for one (its call already closed in the run that executed it). A
+ * hand-built seed without the marker is still recognised by its tool's
+ * dispatch, when the tool is present.
+ */
+function answeredExternalCalls(
+  messages: AgentMessage[],
+  byName: Map<string, Tool>,
+): Array<{ call: ToolCall; result: ToolResult }> {
+  const last = messages[messages.length - 1]
+  const prev = messages[messages.length - 2]
+  if (last?.role !== "tool" || prev?.role !== "assistant") return []
+  const results = new Map(last.results.map((r) => [r.toolCallId, r]))
+  const answered: Array<{ call: ToolCall; result: ToolResult }> = []
+  for (const call of prev.toolCalls) {
+    const tool = byName.get(call.name)
+    const result = results.get(call.id)
+    const parked =
+      call.external === true || (tool !== undefined && toolDispatch(tool) === "external")
+    if (result && parked) answered.push({ call, result })
+  }
+  return answered
+}
+
+/** The result a parked call gets when the run ends before the caller could answer it. */
+function notAnswered(callId: string, why: string): ToolResult {
+  return { toolCallId: callId, content: `not run: ${why}`, isError: true }
+}
+
+/** The one ephemeral line the model sees when `budgetVisible` is on. */
+function budgetLine(stepsLeft: number, maxSteps: number, msLeft: number): AgentMessage {
+  const seconds = Math.max(0, Math.round(msLeft / 1000))
+  return {
+    role: "user",
+    text: `[budget] ${stepsLeft} of ${maxSteps} step(s) and ${seconds}s remain. Plan to finish within them.`,
+  }
 }
 
 /** The finer reason a custom loop's bare outcome implies, when it reported none. */
@@ -363,7 +478,32 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
   if (!stopped && (result.stopReason === "length" || result.finishReason === "length")) {
     throw new TruncatedAnswerError(result)
   }
+  // A single-shot caller has nowhere to put a continuation: returning the
+  // parked run's (usually empty) prose as the answer would silently drop the
+  // transcript, the pending calls and the spent budget. Refuse, carrying all
+  // three, so the caller can still resume through `runConversation`.
+  if (result.outcome === "suspended") throw new SuspendedRunError(result)
   return result.text
+}
+
+/**
+ * Thrown by {@link runAgent} when the model called an external tool: the run is
+ * `suspended`, and a bare string cannot carry what resuming needs. The whole
+ * result rides on the error (`messages`, `pending`, `consumed`), so nothing is
+ * lost; use `runConversation` to resume, or to avoid the throw altogether.
+ */
+export class SuspendedRunError extends Error {
+  readonly result: ConversationResult
+
+  constructor(result: ConversationResult) {
+    super(
+      `the run suspended on ${result.pending?.length ?? 0} external tool call(s) and has no ` +
+        "final answer; runAgent() cannot resume it. Use runConversation(), which returns the " +
+        'parked calls with outcome "suspended" instead of throwing',
+    )
+    this.name = "SuspendedRunError"
+    this.result = result
+  }
 }
 
 /**
@@ -424,6 +564,10 @@ export async function runConversation(
     ...(result.finishReason !== undefined ? { finishReason: result.finishReason } : {}),
     ...(result.usage ? { usage: result.usage } : {}),
     ...(result.terminal ? { terminal: result.terminal } : {}),
+    ...(result.pending && result.pending.length > 0 ? { pending: result.pending } : {}),
+    // A custom loop that reports no spend still spent its steps; the wall clock
+    // is unknown to us then, so it is reported as 0 rather than invented.
+    consumed: result.consumed ?? { steps: result.steps, durationMs: 0 },
   }
 }
 
@@ -440,17 +584,9 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   const { maxSteps, maxDurationMs } = req.limits
   const log = loopCtx.log
 
-  // Both checks come before the first model call: a bad seed or a tool this
-  // loop cannot dispatch is a configuration error, and the cheapest failure is
-  // the one that spends no tokens.
+  // Checked before the first model call: a bad seed is a configuration error,
+  // and the cheapest failure is the one that spends no tokens.
   assertSeed(req.messages)
-  const external = tools.filter((t) => toolDispatch(t) === "external").map((t) => t.spec.name)
-  if (external.length > 0) {
-    throw new Error(
-      `tool(s) ${external.join(", ")} declare dispatch "external", which needs a loop that can ` +
-        "suspend on a pending call and resume with its result; the native loop cannot yet",
-    )
-  }
 
   // One signal for the whole run: the caller's cancel merged with the run's own
   // deadline. It reaches every model call (through `InvokeContext.signal`, down
@@ -465,15 +601,42 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
 
   const byName = new Map(tools.map((t) => [t.spec.name, t]))
   const specs = toToolSpecs(tools)
+  /** Close a parked call this run will not hand to the caller after all. */
+  const closePending = (call: ToolCall, why: string) => {
+    // Closed here, so no longer parked: the mark comes off the transcript's
+    // copy, or a later continuation would close this call a second time.
+    delete call.external
+    log(`tool ${call.name} pending call dropped: ${why}`)
+    events.emit({
+      type: "tool.failed",
+      step,
+      callId: call.id,
+      name: call.name,
+      reason: "aborted",
+      error: `not run: ${why}`,
+    })
+  }
   // The seed is the caller's. It is copied so the loop's appends never reach
   // the array it was handed: a service that kept the seed for its own records
   // must not find it grown.
   const messages: AgentMessage[] = [...req.messages]
-  const request = (toolSpecs: ToolSpec[]) =>
-    chatRequest(system, messages, toolSpecs, undefined, providerOptions)
+  const startedAt = Date.now()
+  const deadlineAt = startedAt + maxDurationMs
+  // The budget line is part of the REQUEST, never of `messages`: a stored
+  // transcript must not fill up with the loop's own bookkeeping, and the
+  // trailing position keeps the cached prefix (system, tools, history) intact.
+  const request = (toolSpecs: ToolSpec[], stepsLeft?: number) =>
+    chatRequest(
+      system,
+      req.limits.budgetVisible && stepsLeft !== undefined
+        ? [...messages, budgetLine(stepsLeft, maxSteps, deadlineAt - Date.now())]
+        : messages,
+      toolSpecs,
+      undefined,
+      providerOptions,
+    )
   const provider = model.id
 
-  const deadlineAt = Date.now() + maxDurationMs
   let finalText = ""
   let lastAssistantText = ""
   let exhausted = false
@@ -487,6 +650,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   let lastFinish: FinishReason | undefined
   let cutOff = false
   const responseIds: string[] = []
+  let pending: ToolCall[] = []
 
   /** Everything a result carries besides the three the caller decides per path. */
   const result = (text: string, outcome: RunOutcome, stopReason: StopReason): LoopResult => ({
@@ -497,6 +661,13 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
     messages,
     provider,
     responseIds,
+    consumed: {
+      steps: stepsTaken,
+      durationMs: Date.now() - startedAt,
+      ...(usage ? { usage } : {}),
+    },
+    // Only a run that ended BECAUSE it parked these reports them.
+    ...(pending.length > 0 && outcome === "suspended" ? { pending } : {}),
     ...(servedModel !== undefined ? { model: servedModel } : {}),
     ...(servedUpstream !== undefined ? { upstream: servedUpstream } : {}),
     ...(lastFinish !== undefined ? { finishReason: lastFinish } : {}),
@@ -528,6 +699,38 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
     return result(text, "canceled", "canceled")
   }
 
+  // A resumed run closes what the suspended one left open: each parked call the
+  // seed now answers gets its `tool.succeeded` or `tool.failed` here, at step 0,
+  // so a consumer following the stream across the two runs sees every
+  // `tool.pending` matched. Nothing is executed; the caller already did that.
+  for (const { call, result: answer } of answeredExternalCalls(messages, byName)) {
+    if (answer.rejected || answer.isError) {
+      // Declined by policy, or executed by the caller and failed: both close as
+      // failures, and the reason keeps them apart. The stream must not say
+      // "succeeded" about a result the conversation records as an error.
+      const reason = answer.rejected ? "rejected" : "threw"
+      log(`tool ${call.name} ${reason === "rejected" ? "rejected by" : "failed at"} the caller`)
+      events.emit({
+        type: "tool.failed",
+        step: 0,
+        callId: call.id,
+        name: call.name,
+        reason,
+        error: answer.content,
+      })
+    } else {
+      log(`tool ${call.name} answered by the caller (${answer.content.length} bytes)`)
+      events.emit({
+        type: "tool.succeeded",
+        step: 0,
+        callId: call.id,
+        name: call.name,
+        bytes: Buffer.byteLength(answer.content, "utf8"),
+        ...undoFields(byName.get(call.name)?.meta),
+      })
+    }
+  }
+
   try {
     for (; step < maxSteps; step += 1) {
       // Wall-clock budget, checked between steps. The deadline signal also
@@ -541,7 +744,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
         break
       }
       signal.throwIfAborted()
-      const turnResult = await model.invoke(request(specs), ctx)
+      const turnResult = await model.invoke(request(specs, maxSteps - step), ctx)
       const turn = turnResult.value
       stepsTaken = step + 1
       // The transcript keeps a detached copy of each call: a tool is handed its
@@ -647,6 +850,26 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
           })
           continue
         }
+        // An external tool is the caller's to run. The call is parked, not
+        // executed, and the run ends `suspended` once this step's server-side
+        // calls have run — so a mixed step executes what it can now and parks
+        // only what it must. The whole call is kept (`argumentsText` included):
+        // what resumes must be what was parked.
+        if (toolDispatch(tool) === "external") {
+          // Marked on the transcript's own copy of the call, so the resumed run
+          // can tell a parked call from one that ran, whatever tools it has.
+          call.external = true
+          pending.push(call)
+          log(`tool ${call.name} pending: dispatched externally`)
+          events.emit({
+            type: "tool.pending",
+            step,
+            callId: call.id,
+            name: call.name,
+            input: detach(call.input),
+          })
+          continue
+        }
         // Emitted BEFORE execution: a process that dies mid-tool still leaves
         // evidence that the effect may have started, which is the one case a
         // rollback consumer cannot afford to infer from silence.
@@ -708,6 +931,32 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
             reason: isAbortError(err, signal) ? "aborted" : "threw",
             error: message,
           })
+        }
+      }
+      if (pending.length > 0) {
+        // A parked call outlives this run only when the run is actually
+        // suspending. A stop or a terminal answer in the same step ends the
+        // run instead, and the parked calls are answered as not run so the
+        // transcript it leaves is whole and resumable.
+        // Each parked call already has a `tool.pending` in the stream, and no
+        // resumed run will come to close it, so it is closed here as
+        // `aborted`: nothing ran, and the run moved on without it.
+        if (signal.aborted) {
+          for (const call of pending) {
+            results.push(notRun(call.id))
+            closePending(call, "the run was stopped before the caller could answer it")
+          }
+          pending = []
+        } else if (terminal) {
+          for (const call of pending) {
+            results.push(notAnswered(call.id, "the run ended with a terminal answer"))
+            closePending(call, "the run ended with a terminal answer")
+          }
+          pending = []
+        } else {
+          if (results.length > 0) messages.push({ role: "tool", results })
+          log(`suspended with ${pending.length} pending external call(s)`)
+          return result(turn.text, "suspended", "suspended")
         }
       }
       messages.push({ role: "tool", results })

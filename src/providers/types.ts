@@ -34,6 +34,13 @@ export interface ToolCall {
    * adapter that needs it reads it back when serialising the call.
    */
   meta?: Record<string, unknown>
+  /**
+   * Set by the loop on a call it parked for the caller (`dispatch: "external"`).
+   * Rides through history so the run that resumes the conversation knows which
+   * results close a `tool.pending`, whatever tools it was given. Providers
+   * ignore it.
+   */
+  external?: true
 }
 
 /**
@@ -57,6 +64,14 @@ export interface ToolResult {
    */
   structured?: unknown
   isError?: boolean
+  /**
+   * The caller declined to execute a parked external call (a gate, a
+   * permission), and `content` says so to the model. Set by the caller when it
+   * resumes a suspended run; providers ignore it. The resumed loop reports the
+   * call as `tool.failed` with `reason: "rejected"`, distinct from a tool that
+   * ran and threw. Implies `isError`.
+   */
+  rejected?: boolean
 }
 
 /** Provider-neutral conversation turn (mapped to each provider's wire format). */

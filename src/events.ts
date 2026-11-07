@@ -37,6 +37,7 @@ export type RunEventType =
   | "model.turn"
   | "model.turn.failed"
   | "tool.called"
+  | "tool.pending"
   | "tool.succeeded"
   | "tool.failed"
   | "run.budget_exhausted"
@@ -62,7 +63,11 @@ export interface RunEventBase {
 }
 
 /**
- * Why a run stopped. `failed` means the loop threw — the error propagates to
+ * Why a run stopped. `suspended` means the model called a tool whose
+ * `dispatch` is `external`: the loop parked the call(s) on `LoopResult.pending`
+ * and returned; it is the caller's to execute them and resume the conversation
+ * with their results. Nothing is held in the meantime — the kernel keeps no
+ * state between the two runs beyond what `messages` carries. `failed` means the loop threw — the error propagates to
  * the caller unchanged, but the stream is closed first so a persistent
  * consumer can tell a crashed run from one that is still going.
  *
@@ -72,7 +77,8 @@ export interface RunEventBase {
  * the native loop both are clean stops that return the accumulated prose, never
  * a throw.
  */
-export type RunOutcome = "completed" | "steps_exhausted" | "timed_out" | "canceled" | "failed"
+export type RunOutcome =
+  "completed" | "steps_exhausted" | "timed_out" | "canceled" | "failed" | "suspended"
 
 /**
  * Why the loop stopped, one level finer than {@link RunOutcome}. `end_turn` and
@@ -88,7 +94,14 @@ export type RunOutcome = "completed" | "steps_exhausted" | "timed_out" | "cancel
  * not apply the text as if it were whole.
  */
 export type StopReason =
-  "end_turn" | "terminal_tool" | "length" | "steps_exhausted" | "timed_out" | "canceled" | "failed"
+  | "end_turn"
+  | "terminal_tool"
+  | "length"
+  | "steps_exhausted"
+  | "timed_out"
+  | "canceled"
+  | "failed"
+  | "suspended"
 
 /**
  * Whether a tool's effect is safe to execute again after an interruption,
@@ -187,6 +200,23 @@ export interface ToolCalledEvent extends RunEventBase {
 }
 
 /**
+ * A tool call the loop parked instead of running, because the tool's
+ * `dispatch` is `external`. The run ends `suspended` with this call on
+ * `LoopResult.pending`; the caller executes it and resumes with the result.
+ * Nothing has run, so this is deliberately not a `tool.called`: that event
+ * promises an effect may have started, and here none has. The matching close
+ * (`tool.succeeded` or `tool.failed` with `reason: "rejected"`) is emitted by
+ * the RESUMED run, when the loop finds the caller's result in its seed.
+ */
+export interface ToolPendingEvent extends RunEventBase {
+  type: "tool.pending"
+  step: number
+  callId: string
+  name: string
+  input: Record<string, unknown>
+}
+
+/**
  * A tool executed successfully.
  *
  * The reversibility fields are copied from the tool's own {@link ToolMetadata}
@@ -219,13 +249,16 @@ export interface ToolSucceededEvent extends RunEventBase {
  *  effect may also have partially landed, but the tool did not fail.
  *  `truncated` is a call the loop refused to run because the output token cap
  *  cut it off (a terminal call on a `length` turn, or arguments that do not
- *  parse); nothing ran, and the model was told to answer again. */
+ *  parse); nothing ran, and the model was told to answer again. `rejected` is
+ *  a parked external call the caller declined by policy (a gate, a permission)
+ *  rather than executed: the result it supplied on resume said so
+ *  (`ToolResult.rejected`), and nothing ran. */
 export interface ToolFailedEvent extends RunEventBase {
   type: "tool.failed"
   step: number
   callId: string
   name: string
-  reason: "threw" | "unknown_tool" | "aborted" | "truncated"
+  reason: "threw" | "unknown_tool" | "aborted" | "truncated" | "rejected"
   error: string
 }
 
@@ -265,6 +298,7 @@ export type RunEvent =
   | ModelTurnEvent
   | ModelTurnFailedEvent
   | ToolCalledEvent
+  | ToolPendingEvent
   | ToolSucceededEvent
   | ToolFailedEvent
   | RunBudgetExhaustedEvent
@@ -281,6 +315,7 @@ export type RunEventInput =
   | Omit<ModelTurnEvent, keyof RunEventBase>
   | Omit<ModelTurnFailedEvent, keyof RunEventBase>
   | Omit<ToolCalledEvent, keyof RunEventBase>
+  | Omit<ToolPendingEvent, keyof RunEventBase>
   | Omit<ToolSucceededEvent, keyof RunEventBase>
   | Omit<ToolFailedEvent, keyof RunEventBase>
   | Omit<RunBudgetExhaustedEvent, keyof RunEventBase>

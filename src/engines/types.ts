@@ -1,7 +1,8 @@
 import type { RunEventSink, RunOutcome, StopReason } from "../events.js"
 import type { ProviderSelection } from "../providers/index.js"
 import type { ProviderOptions } from "../providers/options.js"
-import type { FinishReason } from "../providers/types.js"
+import type { LoopConsumed } from "../loop.js"
+import type { AgentMessage, FinishReason, ToolCall } from "../providers/types.js"
 import type { ConnectorConfig, Permissions, WorkflowDefinition } from "../types.js"
 import type { Isolation } from "./isolation.js"
 import type { EnvironmentFile, RunInstructions, RunSkill, RunSource } from "./environment.js"
@@ -41,8 +42,20 @@ export interface RunSpec {
   connectors: ConnectorConfig[]
   /** Preferred provider + per-run model + per-org BYO keys. */
   provider: { preferred?: string | null } & ProviderSelection
-  /** Optional budget overrides; engines that don't honour these ignore them. */
-  limits?: { maxSteps?: number; maxDurationMs?: number }
+  /** Optional budget overrides; engines that don't honour these ignore them.
+   *  `budgetVisible` tells the native loop to show the model its remaining
+   *  steps and time on every turn (off by default). */
+  limits?: { maxSteps?: number; maxDurationMs?: number; budgetVisible?: boolean }
+  /**
+   * A conversation to continue instead of a fresh task prompt: the stored
+   * history of an earlier run (a `suspended` one, with the parked calls now
+   * answered, or a thread's prior turns) ending with a user message or tool
+   * results. When present the native engine seeds the loop with it verbatim
+   * and builds no user prompt from `workflow`, `context` and `inputs`; the
+   * system prompt is still built from the spec. Out-of-process engines, which
+   * own their own transcript, ignore it.
+   */
+  messages?: AgentMessage[]
   /**
    * Per-call provider options for the run's model calls (prompt caching,
    * token cap, OpenRouter routing). The native engine sends them on every
@@ -179,6 +192,17 @@ export interface EngineResult {
   stopReason?: StopReason
   /** Why the last model call stopped generating, when reported. */
   finishReason?: FinishReason
+  /**
+   * The whole conversation the run leaves behind, when the engine's loop
+   * reported one: what a caller stores to seed the next run's `messages`.
+   * Always present from the native engine; absent from an engine that owns its
+   * own transcript.
+   */
+  messages?: AgentMessage[]
+  /** The external calls parked when `outcome` is `suspended`; see `LoopResult.pending`. */
+  pending?: ToolCall[]
+  /** What the run spent, for a caller carrying a budget across a suspension. */
+  consumed?: LoopConsumed
   /**
    * The adapter that served the run (`"anthropic"`, `"openrouter"`, `"mock"`,
    * …), observed from inside the run rather than predicted from its inputs.
