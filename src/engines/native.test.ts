@@ -3,7 +3,7 @@ import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { NativeEngine } from "./native.js"
-import type { Loop } from "../loop.js"
+import type { Loop, LoopRequest } from "../loop.js"
 import type { RunSpec } from "./types.js"
 
 const SECRET = "tok_live_0123456789"
@@ -88,5 +88,52 @@ describe("NativeEngine secret masking", () => {
     await new NativeEngine({ loop }).run(spec(workdir), { log: () => {} })
 
     expect((JSON.parse(seen()) as { stdout: string }).stdout).toBe("eu")
+  })
+})
+
+describe("NativeEngine seeded conversation", () => {
+  let workdir: string
+
+  beforeAll(async () => {
+    workdir = await mkdtemp(path.join(tmpdir(), "native-seed-"))
+  })
+
+  it("seeds the loop with spec.messages verbatim instead of building a task prompt", async () => {
+    let seen: LoopRequest | undefined
+    const loop: Loop = {
+      name: "records",
+      run: async (req) => {
+        seen = req
+        return {
+          text: "",
+          steps: 1,
+          outcome: "suspended",
+          stopReason: "suspended",
+          messages: [...req.messages, { role: "assistant", text: "", toolCalls: [] }],
+          pending: [{ id: "h1", name: "ask_human", input: {} }],
+          consumed: { steps: 1, durationMs: 5 },
+        }
+      },
+    }
+    const messages: RunSpec["messages"] = [
+      { role: "user", text: "earlier" },
+      { role: "assistant", text: "", toolCalls: [{ id: "h0", name: "ask_human", input: {} }] },
+      { role: "tool", results: [{ toolCallId: "h0", content: "yes" }] },
+    ]
+    const result = await new NativeEngine({ loop }).run(
+      spec(workdir, { messages, limits: { maxSteps: 3, budgetVisible: true } }),
+      { log: () => {} },
+    )
+
+    expect(seen?.messages).toEqual(messages)
+    expect(seen?.limits).toMatchObject({ maxSteps: 3, budgetVisible: true })
+    // The system prompt is still built from the spec; only the user prompt is
+    // replaced (the workflow's task text rides in the seed's own history).
+    expect(seen?.system).toContain("Workflow: Demo")
+    // What the loop reported comes back on the engine result, so a caller can store it.
+    expect(result.outcome).toBe("suspended")
+    expect(result.pending).toEqual([{ id: "h1", name: "ask_human", input: {} }])
+    expect(result.consumed).toEqual({ steps: 1, durationMs: 5 })
+    expect(result.messages).toHaveLength(4)
   })
 })

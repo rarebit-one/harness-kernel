@@ -121,8 +121,11 @@ export {
   runConversation,
   isTruncatedCall,
   TruncatedAnswerError,
+  SuspendedRunError,
   maxToolResultBytes,
   resolveLoopLimits,
+  remainingLimits,
+  withToolResults,
 } from "./agent.js"
 export type {
   RunAgentOptions,
@@ -140,6 +143,8 @@ export type {
   LoopRequest,
   LoopContext,
   RunContext,
+  LoopLimits,
+  LoopConsumed,
   LoopResult,
   TerminalCall,
 } from "./loop.js"
@@ -164,6 +169,7 @@ export type {
   ModelTurnEvent,
   ModelTurnFailedEvent,
   ToolCalledEvent,
+  ToolPendingEvent,
   ToolSucceededEvent,
   ToolFailedEvent,
   RunBudgetExhaustedEvent,

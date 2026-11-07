@@ -69,8 +69,16 @@ Each has a one-line reason here; the full text is in
   them, because a seam property that relies on implementors remembering is a hope.
 - **The kernel names no emission.** `EngineResult.emissions` stays `unknown` and
   is never parsed here; a type for *what a run produced* is product vocabulary.
-- **Emit, never store.** No session store, resume or replay — that needs
-  persistence. A throwing sink is logged and skipped, never fatal.
+- **Emit, never store.** No session store or replay — that needs persistence.
+  A `suspended` run hands the caller `messages`, `pending` and `consumed` and
+  keeps nothing; resuming is the caller seeding the next run. A throwing sink
+  is logged and skipped, never fatal.
+- **One automated quality loop, and it is the model's.** The loop retries
+  nothing for quality: a summary after the step budget, a refusal of a cut-off
+  call, a stop on cancel or deadline, and that is all. Reflect-and-retry nodes,
+  context resets and "try again" wrappers belong to an application that has
+  measured they help; a model driving its own revisions must not compete with
+  a harness doing the same.
 - **Fail loud.** `AgentEngine.supports()` returns a reason and the caller fails
   the run; `selectProvider` throws `ProviderCredentialsError` when no credential
   resolves, and an adapter throws on a `providerOptions` field it cannot honour.

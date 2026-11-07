@@ -39,9 +39,11 @@ export type ResultRetention = "ephemeral" | "standard" | "persistent"
  *                  calls of the same assistant turn still run (in order), so
  *                  the transcript stays whole; the first terminal call that
  *                  succeeds is the answer.
- *   - `external` — the loop does not run it: it returns the pending call and
- *                  resumes when the caller supplies the result. Reserved for a
- *                  loop that can suspend; the native loop refuses it today.
+ *   - `external` — the loop does not run it: the call is parked on
+ *                  `LoopResult.pending`, the run ends `suspended`, and the
+ *                  caller resumes the conversation with the call's result (or
+ *                  a `rejected` one). Server-side calls in the same step still
+ *                  run first.
  *
  * This is the one piece of metadata the native loop acts on rather than merely
  * records, because where a call ends up is control flow, and control flow is

@@ -26,7 +26,7 @@ import type { LoopEventEmitter, RunEventEmitter, RunOutcome, StopReason } from "
 import type { ChatModel } from "./models/chat.js"
 import type { TokenUsage } from "./models/types.js"
 import type { ProviderOptions } from "./providers/options.js"
-import type { AgentMessage, FinishReason } from "./providers/types.js"
+import type { AgentMessage, FinishReason, ToolCall } from "./providers/types.js"
 import type { Tool, ToolOutput } from "./tools/registry.js"
 
 /**
@@ -50,9 +50,35 @@ export interface LoopRequest {
    */
   messages: AgentMessage[]
   tools: Tool[]
-  limits: { maxSteps: number; maxDurationMs: number }
+  limits: LoopLimits
   /** Sent on every model call this loop makes, the budget summary included. */
   providerOptions?: ProviderOptions
+}
+
+/**
+ * A loop's resolved budgets. `maxSteps` and `maxDurationMs` are always numbers
+ * here (see `resolveLoopLimits`). `budgetVisible` is off by default: when on,
+ * the native loop tells the model, on every step, how many steps and how much
+ * time remain, as one short ephemeral user line appended to the request and
+ * never written into `messages`. Enforcement is unchanged either way — the
+ * model's pacing is advisory and the loop's limits are hard.
+ */
+export interface LoopLimits {
+  maxSteps: number
+  maxDurationMs: number
+  budgetVisible?: boolean
+}
+
+/**
+ * What a run has spent so far, reported on every {@link LoopResult}. A caller
+ * that resumes a `suspended` run subtracts this from the original budget (see
+ * `remainingLimits`) so a resumed run is a continuation, not a fresh run. The
+ * kernel keeps nothing between the two runs; this is the number it hands over.
+ */
+export interface LoopConsumed {
+  steps: number
+  durationMs: number
+  usage?: TokenUsage
 }
 
 /**
@@ -158,6 +184,16 @@ export interface LoopResult {
   upstream?: string
   /** Why the last model call stopped generating, when the provider reported it. */
   finishReason?: FinishReason
+  /**
+   * The external tool calls the loop parked, when `outcome` is `suspended`.
+   * Each is the model's call as emitted (`argumentsText` included where the
+   * dialect delivers it), so what resumes is exactly what was parked. The
+   * caller executes them, then resumes with `messages` plus a `ToolResult`
+   * for every id here; `withToolResults` builds that seed.
+   */
+  pending?: ToolCall[]
+  /** What this run spent; see {@link LoopConsumed}. */
+  consumed?: LoopConsumed
 }
 
 /**

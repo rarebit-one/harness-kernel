@@ -294,34 +294,6 @@ describe("runConversation", () => {
     expect(provider.requests).toHaveLength(1)
   })
 
-  it("refuses an external tool before any model call", async () => {
-    const pending: Tool = {
-      spec: {
-        name: "ask_device",
-        description: "runs on the client",
-        inputSchema: { type: "object" },
-      },
-      meta: { dispatch: "external" },
-      execute: async () => "never",
-    }
-    const provider = new ScriptedProvider([prose("unreachable")])
-    const { sink, events } = recordRunEvents()
-
-    await expect(
-      runConversation({
-        provider,
-        system: "s",
-        messages: [{ role: "user", text: "go" }],
-        tools: [pending],
-        emit: sink,
-      }),
-    ).rejects.toThrow(/ask_device.*external/)
-
-    expect(provider.requests).toHaveLength(0)
-    expect(events.map((e) => e.type)).toEqual(["run.started", "run.finished"])
-    expect(events[1]).toMatchObject({ outcome: "failed" })
-  })
-
   it("rejects a seed the model could not continue", async () => {
     const provider = new ScriptedProvider([prose("unreachable")])
     await expect(

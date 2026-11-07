@@ -56,9 +56,12 @@ Moved verbatim from the former `CLAUDE.md`; `AGENTS.md` keeps a one-line summary
   `KnowledgeEntry`/`IssueEntry` for exactly that reason and they were one
   product's vocabulary sitting in a kernel.
 - **Emit, never store.** The kernel produces the run event stream; it keeps
-  none of it. A session store, resume, fork or replay needs persistence and a
-  schema, which is the same infrastructure the "seams, not implementations" rule
-  already keeps out. `recordRunEvents()` is a test recorder and a reference
+  none of it. A session store, fork or replay needs persistence and a schema,
+  which is the same infrastructure the "seams, not implementations" rule
+  already keeps out. Suspend/resume respects this: a `suspended` run returns
+  `messages`, `pending` and `consumed`, and the resume is the caller seeding a
+  new run with them (`withToolResults`, `remainingLimits`). Nothing is held
+  between the two, which is what lets the process end in the meantime. `recordRunEvents()` is a test recorder and a reference
   shape — if it ever grows identity, durability or a size bound, it has become
   the thing this rule forbids. Observability is also never fatal: a sink that
   throws is logged and skipped, the same treatment a failing context provider
@@ -78,6 +81,10 @@ Moved verbatim from the former `CLAUDE.md`; `AGENTS.md` keeps a one-line summary
   a call ends up (`execute` / `terminal` / `external`) is control flow, and
   control flow is the loop's. A second field the loop reads is the tell that
   policy is leaking in.
+- **One automated quality loop.** The loop's only retries are infrastructure:
+  it never re-asks the model for a better answer, never resets context, never
+  scores output. Those are an application's experiments to run and own; a
+  second loop over a model that already revises its own work makes both worse.
 - **TypeScript strict**; `tsc --noEmit` and `eslint` must be clean (CI gates
   both, plus `prettier --check` and the `dist/index.d.ts` emit check).
 - **`moduleResolution: NodeNext`** — every relative import carries an explicit
