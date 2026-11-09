@@ -120,16 +120,6 @@ describe("openai request limits", () => {
     expect(createMock.mock.calls[0]![0]).toMatchObject({ max_completion_tokens: 2222 })
   })
 
-  it("sends the configured RUNNER_MAX_TOKENS as max_completion_tokens on complete", async () => {
-    vi.stubEnv("RUNNER_MAX_TOKENS", "2222")
-    const provider = new OpenAIProvider("test-key")
-
-    await provider.complete({ system: "s", prompt: "hi" })
-
-    expect(createMock).toHaveBeenCalledTimes(1)
-    expect(createMock.mock.calls[0]![0]).toMatchObject({ max_completion_tokens: 2222 })
-  })
-
   it("defaults the cap to 4096 when RUNNER_MAX_TOKENS is unset", async () => {
     vi.stubEnv("RUNNER_MAX_TOKENS", undefined)
     const provider = new OpenAIProvider("test-key")

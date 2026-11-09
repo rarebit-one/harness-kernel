@@ -57,17 +57,25 @@ describe("local client configuration", () => {
 
   it("resolves the model: explicit, then LOCAL_MODEL, then the coded default", async () => {
     const explicit = new LocalProvider("http://x/v1", undefined, "my-gguf")
-    await explicit.complete({ system: "s", prompt: "hi" })
+    await explicit.converse({ system: "s", messages: [{ role: "user", text: "hi" }], tools: [] })
     expect(createMock.mock.calls[0]![0]).toMatchObject({ model: "my-gguf" })
     createMock.mockClear()
 
     vi.stubEnv("LOCAL_MODEL", "env-model")
-    await new LocalProvider("http://x/v1").complete({ system: "s", prompt: "hi" })
+    await new LocalProvider("http://x/v1").converse({
+      system: "s",
+      messages: [{ role: "user", text: "hi" }],
+      tools: [],
+    })
     expect(createMock.mock.calls[0]![0]).toMatchObject({ model: "env-model" })
     createMock.mockClear()
 
     vi.stubEnv("LOCAL_MODEL", undefined)
-    await new LocalProvider("http://x/v1").complete({ system: "s", prompt: "hi" })
+    await new LocalProvider("http://x/v1").converse({
+      system: "s",
+      messages: [{ role: "user", text: "hi" }],
+      tools: [],
+    })
     expect(createMock.mock.calls[0]![0]).toMatchObject({ model: LOCAL_DEFAULT_MODEL })
   })
 })

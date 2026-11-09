@@ -1,10 +1,4 @@
-import type {
-  CompletionRequest,
-  ConverseOptions,
-  ConverseRequest,
-  ConverseResult,
-  Provider,
-} from "./types.js"
+import type { ConverseOptions, ConverseRequest, ConverseResult, Provider } from "./types.js"
 import type { ProviderSelection } from "./index.js"
 
 /**
@@ -67,41 +61,34 @@ export class MockProvider implements Provider {
     ]
   }
 
-  complete(req: CompletionRequest): Promise<string> {
-    const preview = req.prompt.slice(0, 600)
-    return Promise.resolve(
-      [
-        "# Workflow Output (mock provider)",
-        "",
-        "_Generated offline by the harness-kernel mock provider. Set ANTHROPIC_API_KEY",
-        "or OPENAI_API_KEY to use a real model._",
-        "",
-        ...this.selectionLines(),
-        "## System",
-        "",
-        req.system,
-        "",
-        "## Context + Inputs (excerpt)",
-        "",
-        "```",
-        preview,
-        "```",
-      ].join("\n"),
-    )
-  }
-
   // The mock never calls tools, so the agent loop terminates after one turn. It
   // echoes which tools were available, which is handy when running offline.
   // It honours `signal` the way a real adapter does: an aborted call rejects
   // with the signal's reason instead of returning a turn.
+  // eslint-disable-next-line @typescript-eslint/require-await
   async converse(req: ConverseRequest, opts?: ConverseOptions): Promise<ConverseResult> {
     opts?.signal?.throwIfAborted()
     const lastUser = [...req.messages].reverse().find((m) => m.role === "user")
     const prompt = lastUser && lastUser.role === "user" ? lastUser.text : ""
-    const text = await this.complete({
-      system: `${req.system}\n\nAvailable tools: ${req.tools.map((t) => t.name).join(", ") || "(none)"}`,
-      prompt,
-    })
+    const system = `${req.system}\n\nAvailable tools: ${req.tools.map((t) => t.name).join(", ") || "(none)"}`
+    const preview = prompt.slice(0, 600)
+    const text = [
+      "# Workflow Output (mock provider)",
+      "",
+      "_Generated offline by the harness-kernel mock provider. Set ANTHROPIC_API_KEY",
+      "or OPENAI_API_KEY to use a real model._",
+      "",
+      ...this.selectionLines(),
+      "## System",
+      "",
+      system,
+      "",
+      "## Context + Inputs (excerpt)",
+      "",
+      "```",
+      preview,
+      "```",
+    ].join("\n")
     opts?.signal?.throwIfAborted()
     return { text, toolCalls: [], finishReason: "stop" }
   }

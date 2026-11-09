@@ -12,7 +12,6 @@ import {
 } from "./options.js"
 import type {
   AgentMessage,
-  CompletionRequest,
   ConverseOptions,
   ConverseRequest,
   ConverseResult,
@@ -319,22 +318,6 @@ export class OpenAICompatibleProvider implements Provider {
       ...(opts.defaultHeaders !== undefined ? { defaultHeaders: opts.defaultHeaders } : {}),
     })
     this.model = opts.model
-  }
-
-  async complete(req: CompletionRequest): Promise<string> {
-    const completion = await this.client.chat.completions.create({
-      model: this.model,
-      // Same field rule as `converse`: OpenAI's current name, the documented one elsewhere.
-      ...(this.name === OPENAI_ADAPTER
-        ? { max_completion_tokens: maxTokens() }
-        : { max_tokens: maxTokens() }),
-      messages: [
-        { role: "system", content: req.system },
-        { role: "user", content: req.prompt },
-      ],
-    })
-
-    return completion.choices[0]?.message?.content ?? ""
   }
 
   async converse(req: ConverseRequest, opts?: ConverseOptions): Promise<ConverseResult> {

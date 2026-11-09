@@ -253,7 +253,6 @@ describe("runConversation", () => {
     // so it cannot play this part.)
     const provider: Provider = {
       name: "deaf",
-      complete: async () => "",
       converse: async () => {
         controller.abort("deadline")
         return { text: "", toolCalls: [{ id: "a", name: "echo", input: {} }] }
@@ -447,7 +446,6 @@ describe("runConversation", () => {
   it("reports the model and upstream of the LAST response only, clearing stale ones", async () => {
     const deaf: Provider = {
       name: "custom",
-      complete: async () => "",
       converse: async (req) =>
         req.messages.length === 1
           ? { ...callEcho(), model: "m-first", upstream: "Vendor A" }
@@ -672,7 +670,6 @@ describe("finish reasons and the length rule (0.11.0-next.1)", () => {
     // Ignores its signal: cancels mid-call and still returns a cut-off turn.
     const deaf: Provider = {
       name: "deaf",
-      complete: async () => "",
       converse: async () => {
         controller.abort("user left")
         return { text: "once upon a ti", toolCalls: [], finishReason: "length" }
