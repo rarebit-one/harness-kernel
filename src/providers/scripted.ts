@@ -1,10 +1,4 @@
-import type {
-  CompletionRequest,
-  ConverseOptions,
-  ConverseRequest,
-  ConverseResult,
-  Provider,
-} from "./types.js"
+import type { ConverseOptions, ConverseRequest, ConverseResult, Provider } from "./types.js"
 
 /**
  * One scripted model turn: a fixed result, or a function of the request it
@@ -91,16 +85,6 @@ export class ScriptedProvider implements Provider {
       ...copy,
       ...(copy.model === undefined && this.model !== undefined ? { model: this.model } : {}),
     }
-  }
-
-  /** Play the next turn as a one-shot completion and return its text. */
-  async complete(req: CompletionRequest): Promise<string> {
-    const result = await this.converse({
-      system: req.system,
-      messages: [{ role: "user", text: req.prompt }],
-      tools: [],
-    })
-    return result.text
   }
 }
 

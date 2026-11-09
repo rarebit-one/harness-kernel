@@ -68,19 +68,17 @@ describe("anthropic request limits", () => {
     vi.stubEnv("RUNNER_MAX_TOKENS", "1234")
     const provider = new AnthropicProvider("test-key")
 
-    await provider.complete({ system: "s", prompt: "p" })
     await provider.converse({ system: "s", messages: [{ role: "user", text: "hi" }], tools: [] })
 
-    expect(createMock).toHaveBeenCalledTimes(2)
+    expect(createMock).toHaveBeenCalledTimes(1)
     expect(createMock.mock.calls[0]![0]).toMatchObject({ max_tokens: 1234 })
-    expect(createMock.mock.calls[1]![0]).toMatchObject({ max_tokens: 1234 })
   })
 
   it("defaults max_tokens to 4096 when RUNNER_MAX_TOKENS is unset", async () => {
     vi.stubEnv("RUNNER_MAX_TOKENS", undefined)
     const provider = new AnthropicProvider("test-key")
 
-    await provider.complete({ system: "s", prompt: "p" })
+    await provider.converse({ system: "s", messages: [{ role: "user", text: "hi" }], tools: [] })
 
     expect(createMock.mock.calls[0]![0]).toMatchObject({ max_tokens: 4096 })
   })

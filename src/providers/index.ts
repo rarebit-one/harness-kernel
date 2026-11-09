@@ -5,7 +5,7 @@ import { LocalProvider } from "./local.js"
 import { MockProvider } from "./mock.js"
 import type { Provider } from "./types.js"
 
-export type { Provider, CompletionRequest } from "./types.js"
+export type { Provider } from "./types.js"
 
 /** Per-run model + bring-your-own keys, resolved by the caller. */
 export interface ProviderSelection {

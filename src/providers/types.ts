@@ -1,11 +1,6 @@
 import type { TokenUsage } from "../models/types.js"
 import type { ProviderOptions } from "./options.js"
 
-export interface CompletionRequest {
-  system: string
-  prompt: string
-}
-
 /** A tool offered to the model, described by a JSON-Schema input shape. */
 export interface ToolSpec {
   name: string
@@ -150,8 +145,6 @@ export interface Provider {
    * mock, most custom providers) never advertises usage it will not deliver.
    */
   readonly reportsUsage?: boolean
-  /** One-shot completion (no tools) — kept for simple callers. */
-  complete(req: CompletionRequest): Promise<string>
   /** One step of a tool-use conversation; the agent loop drives the rest. */
   converse(req: ConverseRequest, opts?: ConverseOptions): Promise<ConverseResult>
 }

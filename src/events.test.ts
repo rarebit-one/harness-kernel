@@ -399,7 +399,6 @@ describe("runAgent event stream", () => {
     const logs: string[] = []
     const provider: Provider = {
       name: "summary-fails",
-      complete: async () => "",
       converse: async (req: ConverseRequest): Promise<ConverseResult> => {
         if (req.tools.length === 0) throw new Error("summary provider is down")
         return { text: "again", toolCalls: [{ id: "t", name: "ok", input: {} }] }

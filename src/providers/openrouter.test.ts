@@ -70,12 +70,20 @@ describe("openrouter client configuration", () => {
 
   it("falls back to OPENROUTER_MODEL, then the coded default", async () => {
     vi.stubEnv("OPENROUTER_MODEL", "anthropic/claude-opus-4.5")
-    await new OpenRouterProvider("or-key").complete({ system: "s", prompt: "hi" })
+    await new OpenRouterProvider("or-key").converse({
+      system: "s",
+      messages: [{ role: "user", text: "hi" }],
+      tools: [],
+    })
     expect(createMock.mock.calls[0]![0]).toMatchObject({ model: "anthropic/claude-opus-4.5" })
 
     vi.stubEnv("OPENROUTER_MODEL", undefined)
     createMock.mockClear()
-    await new OpenRouterProvider("or-key").complete({ system: "s", prompt: "hi" })
+    await new OpenRouterProvider("or-key").converse({
+      system: "s",
+      messages: [{ role: "user", text: "hi" }],
+      tools: [],
+    })
     expect(createMock.mock.calls[0]![0]).toMatchObject({ model: OPENROUTER_DEFAULT_MODEL })
   })
 

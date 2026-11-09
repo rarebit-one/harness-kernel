@@ -29,7 +29,6 @@ export type {
 } from "./providers/options.js"
 export type {
   Provider,
-  CompletionRequest,
   ConverseRequest,
   ConverseResult,
   ConverseOptions,

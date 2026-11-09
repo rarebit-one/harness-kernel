@@ -93,12 +93,6 @@ describe("ScriptedProvider", () => {
     expect(provider.remaining).toBe(1)
   })
 
-  it("plays a one-shot completion from the same script", async () => {
-    const provider = new ScriptedProvider([{ text: "completed", toolCalls: [] }])
-    expect(await provider.complete({ system: "s", prompt: "p" })).toBe("completed")
-    expect(provider.requests[0]?.messages).toEqual([{ role: "user", text: "p" }])
-  })
-
   it("declares usage only when told to", () => {
     expect(new ScriptedProvider([]).reportsUsage).toBe(false)
     expect(new ScriptedProvider([], { reportsUsage: true }).reportsUsage).toBe(true)

@@ -160,7 +160,6 @@ describe("cancellation — the native loop", () => {
     const ran: string[] = []
     const provider: Provider = {
       name: "two-tools",
-      complete: async () => "",
       converse: async () => ({
         text: "",
         toolCalls: [
@@ -203,7 +202,6 @@ describe("cancellation — the native loop", () => {
       let turns = 0
       const provider: Provider = {
         name: "runner",
-        complete: async () => "",
         converse: async () => {
           turns += 1
           return turns === 1
@@ -325,7 +323,6 @@ describe("cancellation — tool context", () => {
     let turns = 0
     const provider: Provider = {
       name: "p",
-      complete: async () => "",
       converse: async () => {
         turns += 1
         return turns === 1
@@ -470,7 +467,6 @@ describe("replay metadata", () => {
     let turns = 0
     const provider: Provider = {
       name: "p",
-      complete: async () => "",
       converse: async () => {
         turns += 1
         return turns === 1
@@ -527,7 +523,6 @@ describe("usage", () => {
     const provider: Provider = {
       name: "p",
       reportsUsage: true,
-      complete: async () => "",
       converse: async () => ({
         text: "hi",
         toolCalls: [],
@@ -798,7 +793,6 @@ describe("review round 2", () => {
     }
     const provider: Provider = {
       name: "p",
-      complete: async () => "",
       converse: async () => ({ text: "", toolCalls: [{ id: "f1", name: "flaky", input: {} }] }),
     }
     const { sink, events } = recordRunEvents()
@@ -820,7 +814,6 @@ describe("review round 3", () => {
     // Ignores its signal: aborts the run, then answers with a terminal turn anyway.
     const provider: Provider = {
       name: "deaf",
-      complete: async () => "",
       converse: async () => {
         controller.abort()
         return { text: "late answer", toolCalls: [] }
@@ -845,7 +838,6 @@ describe("review round 3", () => {
     const controller = new AbortController()
     const provider: Provider = {
       name: "broken",
-      complete: async () => "",
       converse: async () => {
         controller.abort()
         throw new Error("500 upstream exploded")
@@ -870,7 +862,6 @@ describe("review round 3", () => {
     const controller = new AbortController()
     const provider: Provider = {
       name: "sdk",
-      complete: async () => "",
       converse: async () => {
         controller.abort()
         throw new APIUserAbortError("Request was aborted.")

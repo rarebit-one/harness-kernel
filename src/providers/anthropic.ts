@@ -12,7 +12,6 @@ import {
 } from "./options.js"
 import type {
   AgentMessage,
-  CompletionRequest,
   ConverseOptions,
   ConverseRequest,
   ConverseResult,
@@ -245,20 +244,6 @@ export class AnthropicProvider implements Provider {
       ...(baseURL !== undefined ? { baseURL } : {}),
     })
     this.model = model
-  }
-
-  async complete(req: CompletionRequest): Promise<string> {
-    const message = await this.client.messages.create({
-      model: this.model,
-      max_tokens: maxTokens(),
-      system: req.system,
-      messages: [{ role: "user", content: req.prompt }],
-    })
-
-    return message.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("\n")
   }
 
   async converse(req: ConverseRequest, opts?: ConverseOptions): Promise<ConverseResult> {
