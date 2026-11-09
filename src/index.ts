@@ -52,7 +52,6 @@ export type { ScriptedTurn, ScriptedProviderOptions } from "./providers/scripted
 // The model seam — the neutral arrow every model kind is invoked through
 // ---------------------------------------------------------------------------
 export {
-  emitCompleteToolCall,
   invokeStreaming,
   modelIdentity,
   requireCapability,
@@ -192,14 +191,11 @@ export {
 } from "./tools/registry.js"
 export type { Tool, ToolOutput, ToolContext, ConnectorToolName } from "./tools/registry.js"
 export {
-  selectTools,
   isToolVisible,
   toToolSpecs,
   toolsRequiringConfirmation,
   replaySafeTools,
-  undoToolFor,
   toolDispatch,
-  terminalTools,
 } from "./tools/metadata.js"
 export type {
   ToolMetadata,
