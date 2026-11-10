@@ -36,10 +36,22 @@ new.
 ## Install
 
 ```bash
-npm install @rarebit-one/harness-kernel   # once published
+npm install @rarebit-one/harness-kernel
 ```
 
 ESM-only, Node >= 22.
+
+The `claude-code` engine drives `@anthropic-ai/claude-agent-sdk`, which is an
+**optional peer dependency**: it is proprietary, under its vendor's own terms
+rather than this package's MIT licence, and it carries the vendor CLI binary.
+An application that runs that engine installs it itself:
+
+```bash
+npm install @anthropic-ai/claude-agent-sdk
+```
+
+Every other engine and the whole native loop work without it. Running the
+`claude-code` engine without it throws `AgentSdkMissingError`.
 
 ## What's in it
 

@@ -1,4 +1,4 @@
-import type { McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk"
+import { loadAgentSdk } from "./agentSdk.js"
 import type { CapabilityTool } from "./capability.js"
 
 /**
@@ -15,19 +15,31 @@ export function capabilityToolIds(tools: CapabilityTool[]): string[] {
 }
 
 /**
+ * The in-process server config the Agent SDK hands back, described structurally:
+ * this module is part of the public surface, and its declarations must not
+ * require the SDK, which is an optional peer. `instance` is the SDK's server.
+ */
+export interface CapabilitySdkServerConfig {
+  type: "sdk"
+  name: string
+  instance: unknown
+}
+
+/**
  * Wrap the transport-neutral {@link CapabilityTool}s in an in-process Anthropic
  * Agent SDK MCP server, so the Claude Code engine gets the exact same
  * workspace-scoped authority the native engine has — no separate process, no
- * network. The SDK is imported lazily (this module is only reached from the
- * Claude Code driver, which never runs on a warm shared host).
+ * network. The SDK is an optional peer, imported lazily (this is only reached
+ * from the Claude Code driver, which never runs on a warm shared host); calling
+ * it without the SDK installed throws `AgentSdkMissingError`.
  *
  * The capability handler is the security boundary; this adapter only marshals
  * the SDK's parsed args into it and JSON-encodes the result back to the model.
  */
 export async function capabilitySdkServer(
   tools: CapabilityTool[],
-): Promise<McpSdkServerConfigWithInstance> {
-  const { createSdkMcpServer, tool } = await import("@anthropic-ai/claude-agent-sdk")
+): Promise<CapabilitySdkServerConfig> {
+  const { createSdkMcpServer, tool } = await loadAgentSdk()
   return createSdkMcpServer({
     name: CAPABILITY_SERVER_NAME,
     version: "0.1.0",
