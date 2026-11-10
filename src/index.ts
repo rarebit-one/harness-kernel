@@ -281,6 +281,8 @@ export {
   capabilityToolIds,
   CAPABILITY_SERVER_NAME,
 } from "./engines/capabilityMcp.js"
+export type { CapabilitySdkServerConfig } from "./engines/capabilityMcp.js"
+export { AgentSdkMissingError } from "./engines/agentSdkMissing.js"
 export {
   buildCapabilityStdioServer,
   serveCapability,

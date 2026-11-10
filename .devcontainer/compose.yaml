@@ -10,8 +10,8 @@ services:
       - ..:/workspace:z,cached
       # node_modules lives in a named volume rather than the bind mount, so the
       # container's Linux install and the host's macOS install stay independent.
-      # This is not cosmetic: @anthropic-ai/claude-agent-sdk (via the kernel's
-      # own dependencies) ships arch-specific optional packages, so a shared
+      # This is not cosmetic: @anthropic-ai/claude-agent-sdk (a dev dependency
+      # here, an optional peer for consumers) ships arch-specific optional packages, so a shared
       # node_modules means whichever side ran `npm ci` last breaks the other.
       - node-modules:/workspace/node_modules
 

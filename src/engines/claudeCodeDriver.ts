@@ -1,5 +1,6 @@
 import type { McpServerConfig, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { runStop, type StoppedBy } from "../signals.js"
+import { loadAgentSdk } from "./agentSdk.js"
 import type { ClaudeCodeMessage, ClaudeCodeOptions } from "./claudeCode.js"
 import { CAPABILITY_SERVER_NAME, capabilitySdkServer, capabilityToolIds } from "./capabilityMcp.js"
 import { connectorServers } from "./connectorMcp.js"
@@ -9,9 +10,10 @@ import { withoutShadowed } from "./gateway.js"
 /**
  * The default Claude Code driver: runs the Anthropic Agent SDK's `query()` (which
  * spawns the Claude Code CLI) against the prepared workdir and normalizes its
- * message stream. This is the ONLY module that touches the SDK, and it loads it
- * lazily (dynamic import) so the warm runner — where this engine never runs —
- * doesn't pay to import it.
+ * message stream. The SDK is an optional peer, reached only from here and the
+ * capability server this mounts, and loaded lazily (dynamic import): the warm
+ * runner — where this engine never runs — doesn't pay to import it, and an
+ * application that never uses this engine doesn't have to install it.
  *
  * Permission mode is `bypassPermissions`: this engine only runs inside a throwaway
  * ephemeral container (enforced by ClaudeCodeEngine.supports), so the container,
@@ -20,7 +22,7 @@ import { withoutShadowed } from "./gateway.js"
 export async function* defaultClaudeCodeDriver(
   opts: ClaudeCodeOptions,
 ): AsyncIterable<ClaudeCodeMessage> {
-  const { query } = await import("@anthropic-ai/claude-agent-sdk")
+  const { query } = await loadAgentSdk()
 
   // The SDK takes an AbortController, so the merged stop signal (own timer +
   // the caller's cancel) drives one. `stop.stoppedBy()` says which fired.
@@ -38,7 +40,11 @@ export async function* defaultClaudeCodeDriver(
   const connectors = connectorServers(opts.connectors ?? [])
   const mcpServers: Record<string, McpServerConfig> = { ...connectors }
   if (capabilities.length > 0) {
-    mcpServers[CAPABILITY_SERVER_NAME] = await capabilitySdkServer(capabilities)
+    // The capability server is typed structurally (no SDK types on the public
+    // surface); here, next to the SDK, it is the SDK's own in-process config.
+    mcpServers[CAPABILITY_SERVER_NAME] = (await capabilitySdkServer(
+      capabilities,
+    )) as McpServerConfig
   }
   const hasMcpServers = Object.keys(mcpServers).length > 0
 
