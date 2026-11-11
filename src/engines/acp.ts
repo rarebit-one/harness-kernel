@@ -10,6 +10,7 @@ import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec }
 import { CAPABILITY_SERVER_NAME } from "./capabilityMcp.js"
 import {
   connectorServers,
+  refuseConnectorAuthHeaders,
   refuseConnectorToolFilter,
   type SerializableMcpServer,
 } from "./connectorMcp.js"
@@ -208,6 +209,7 @@ export class AcpEngine implements AgentEngine {
       refuseUnisolated(this.name, spec) ??
       refuseBadGateway(this.name, spec) ??
       refuseConnectorToolFilter(this.name, spec) ??
+      refuseConnectorAuthHeaders(this.name, spec) ??
       refuseCredentialsInVm(this.name, spec, this.agent.hostKeyEnvs ?? []) ?? { ok: true }
     )
   }

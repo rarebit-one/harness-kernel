@@ -9,6 +9,7 @@ import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec }
 import { CAPABILITY_SERVER_NAME } from "./capabilityMcp.js"
 import {
   connectorServers,
+  refuseConnectorAuthHeaders,
   refuseConnectorToolFilter,
   writeCodexConfig,
   type SerializableMcpServer,
@@ -131,6 +132,7 @@ export class CodexEngine implements AgentEngine {
       refuseUnisolated("codex", spec) ??
       refuseBadGateway("codex", spec) ??
       refuseConnectorToolFilter("codex", spec) ??
+      refuseConnectorAuthHeaders("codex", spec) ??
       refuseCredentialsInVm("codex", spec, ["OPENAI_API_KEY", "CODEX_API_KEY"]) ?? { ok: true }
     )
   }

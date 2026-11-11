@@ -508,6 +508,18 @@ both retry), and the `openai` adapter sends the cap as `max_completion_tokens`
 local servers get `max_tokens`. `connectorTools(..., { toolName })` names MCP
 tools your way when the default `<connector>__<tool>` prefix is in the way.
 
+A connector whose credential rotates during a run sets `auth.headers`, a
+function (async allowed) returning the headers for one request, instead of a
+static `auth.token`. The HTTP transports ask it before every request, and after
+a 401 ask once more with `refresh: true` and retry that request once; a throw
+fails the request with `connector <name>: auth headers function failed`, never
+the function's own message. The native engine masks every value it returns in
+tool output, as it does the run's `secrets` and a static token. The
+out-of-process engines read their server config once, so they refuse such a run
+in `supports()`, and stdio refuses it (its token is set at spawn).
+`ConnectorConfig.clientInfo` (`{ name, version? }`) replaces the default client
+identity announced to the server.
+
 ### Recorded evals with `ScriptedProvider`
 
 ```ts
@@ -696,7 +708,8 @@ checks.
 A `vm` run is also refused when it holds **exposed** credentials, which no
 gateway can inject and which therefore reach the guest in the clear: non-empty
 `secrets`, or a connector credential the harness carries itself (`auth.token`,
-or `headers` / `env` values on a caller's connector shape). A connector whose
+an `auth.headers` function, or `headers` / `env` values on a caller's connector
+shape). A connector whose
 token is the gateway's run token is routed, not exposed. The caller's policy can
 lift this with `RunSpec.exposedCredentials: "allowed"`; absent, it refuses.
 Below `vm` nothing changes.

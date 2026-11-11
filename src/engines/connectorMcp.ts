@@ -82,6 +82,27 @@ export function refuseConnectorToolFilter(
 }
 
 /**
+ * The `supports()` refusal an out-of-process engine gives a run whose
+ * connectors authenticate through an `auth.headers` function, or `undefined`
+ * when none do. A harness in another process reads its server config once and
+ * cannot call back for a fresh credential, so carrying one snapshot would
+ * quietly break the rotation the caller asked for.
+ */
+export function refuseConnectorAuthHeaders(
+  engine: string,
+  spec: { connectors?: ConnectorConfig[] },
+): { ok: false; reason: string } | undefined {
+  const dynamic = (spec.connectors ?? []).filter((c) => c.kind === "mcp" && c.auth?.headers)
+  if (dynamic.length === 0) return undefined
+  return {
+    ok: false,
+    reason:
+      `${engine} engine cannot ask a connector for fresh auth headers ` +
+      `(${dynamic.map((c) => c.name).join(", ")} set auth.headers); use the native engine or resolve auth.token`,
+  }
+}
+
+/**
  * Build the `<name> → server config` map for a run's MCP connectors, skipping any
  * that don't translate. Suitable both for the Agent SDK's `mcpServers` option and
  * for a `.mcp.json` file's `mcpServers` field.

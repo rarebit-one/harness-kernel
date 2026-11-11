@@ -6,6 +6,7 @@ import type { ConnectorConfig } from "../types.js"
 import {
   connectorServers,
   connectorToMcpServer,
+  refuseConnectorAuthHeaders,
   refuseConnectorToolFilter,
   writeCodexConfig,
   writeMcpJson,
@@ -170,5 +171,29 @@ describe("refuseConnectorToolFilter", () => {
       expect(refusal?.ok).toBe(false)
       expect(refusal?.reason).toContain("ops")
     }
+  })
+})
+
+describe("refuseConnectorAuthHeaders", () => {
+  const mcp = {
+    name: "ops",
+    kind: "mcp" as const,
+    transport: "streamable_http" as const,
+    endpoint: "https://x",
+  }
+
+  it("lets a run through when no connector uses an auth.headers function", () => {
+    const bearer = { ...mcp, auth: { type: "bearer" as const, token: "tok-123456" } }
+    expect(refuseConnectorAuthHeaders("codex", { connectors: [mcp, bearer] })).toBeUndefined()
+    expect(refuseConnectorAuthHeaders("codex", {})).toBeUndefined()
+  })
+
+  it("refuses a run whose connector authenticates through a function, naming it", () => {
+    const refusal = refuseConnectorAuthHeaders("codex", {
+      connectors: [{ ...mcp, auth: { type: "bearer", headers: () => ({}) } }],
+    })
+    expect(refusal?.ok).toBe(false)
+    expect(refusal?.reason).toContain("codex engine cannot ask a connector for fresh auth headers")
+    expect(refusal?.reason).toContain("ops")
   })
 })
