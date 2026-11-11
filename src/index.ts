@@ -131,6 +131,8 @@ export type {
   ConversationResult,
   LoopRunOptions,
 } from "./agent.js"
+export { settleMessages, withUserTurn } from "./transcript.js"
+export type { SettleOptions } from "./transcript.js"
 
 // Extension point 7 — the control loop itself. The kernel ships exactly one
 // (`nativeLoop`, the loop `runAgent` has always run); this is the interface
