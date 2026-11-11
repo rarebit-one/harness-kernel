@@ -440,6 +440,51 @@ counting down. It is never written into `messages`, and it rides after the
 history so the cached prefix (system, tools, earlier turns) is untouched. The
 limits stay hard either way; the line only lets the model pace itself.
 
+### Parallel tool calls
+
+By default the loop runs a step's tool calls one at a time, in the order the
+model issued them. A run can opt into running some of them together:
+
+```ts
+import { isConcurrencySafe, runConversation } from "@rarebit-one/harness-kernel"
+
+const readFile: Tool = { spec, meta: { concurrencySafe: true }, execute }
+
+await runConversation({
+  provider,
+  system,
+  messages,
+  tools,
+  toolConcurrency: { maxConcurrent: 8, concurrencySafe: isConcurrencySafe },
+})
+```
+
+`meta.concurrencySafe: true` is how a tool says it has no effect another call
+could observe or race. The loop never reads it: the run passes the predicate,
+and `isConcurrencySafe` is the one that honours the tools' own claims. An
+application with its own rule (by name, by connector) passes that instead.
+
+The ordering rule keeps the model's order wherever it can matter. A step's
+calls are split, in order, into segments: each run of consecutive safe calls is
+one segment and runs in parallel, at most `maxConcurrent` at once; every other
+call is a segment of its own, and a segment starts only when the one before it
+has settled. So `[read, read, write, read]` runs both reads together, then the
+write alone, then the last read. A call nobody vouched for sees every earlier
+call finished and no later call started, exactly as in series.
+
+Everything else holds as in series. Results go back to the model in call order,
+whatever order they finished in. `tool.called` is emitted, in call order, as
+each call starts and before its effect; `tool.succeeded`/`tool.failed` arrive as
+each one finishes, and `seq` stays gapless. A cancel or the deadline aborts the
+calls in flight, and calls not yet started are answered as not run. When
+several terminal calls succeed, the answer is the first one the model issued,
+not the first to finish. External calls are parked as they come up and the run
+suspends once the step's other calls have settled.
+
+`NativeEngine` takes its run from a `RunSpec`, which is data, so it does not
+carry the predicate; give the engine a loop that adds it:
+`{ name: "native", run: (req, ctx) => nativeLoop.run({ ...req, toolConcurrency }, ctx) }`.
+
 ### Provider options and prompt caching
 
 `providerOptions` rides on every model call a run makes and each adapter maps it
