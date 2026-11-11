@@ -114,8 +114,12 @@ export type ToolReplay = "safe" | "unsafe"
 export type BudgetKind = "steps" | "duration"
 
 /** The loop is about to take its first turn. Carries the resolved budgets and
- *  the tool surface actually handed to the model — which is the projected
- *  surface, after metadata scoping, not everything the caller passed in. */
+ *  the names of the tools the loop was handed, which is the surface the model
+ *  sees. No engine applies metadata scoping (`targetCapabilities`,
+ *  `invocationModes`) on the way in: a caller that wants it narrows first,
+ *  with `tools.filter((t) => isToolVisible(t, selection))`. `NativeEngine`
+ *  applies the `permissions.tools` allowlist to primitives and passes it to the
+ *  domain-tool factory, which decides whether to honour it. */
 export interface RunStartedEvent extends RunEventBase {
   type: "run.started"
   maxSteps: number

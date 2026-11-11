@@ -63,10 +63,14 @@ export interface WorkflowDefinition {
   runner?: { profile?: string }
   provider?: { preferred?: string }
   prompt?: string
-  /** Shell commands run in the sandbox BEFORE the agent, to install the run's own
-   *  dependencies (e.g. `npm ci`). Runs with the run's secrets in env; a failure
-   *  aborts the run (the agent must not run without its deps). */
+  /** Shell commands meant to run in the sandbox BEFORE the agent, to install the
+   *  run's own dependencies (e.g. `npm ci`). The kernel carries this and never
+   *  executes it: the caller runs it before `engine.run`, with the run's secrets
+   *  in env, and should abort the run on failure (the agent must not run without
+   *  its deps). */
   setup?: string[]
-  /** Shell commands run as a deterministic audit gate after output is produced. */
+  /** Shell commands meant to run as a deterministic audit gate after output is
+   *  produced. The kernel carries this and never executes it: the caller runs it
+   *  after `engine.run` and decides what a failure means. */
   verify?: string[]
 }
