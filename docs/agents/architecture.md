@@ -21,6 +21,7 @@ around — the kernel never bends to a consumer.
 | `src/context/` | `ContextProvider` chain — `assembleContext` / `renderContext` |
 | `src/providers/` | `Provider` interface + anthropic / openai / openrouter / local / mock / scripted adapters, `selectProvider` (+ `providerAvailability`, `ProviderCredentialsError`); `options.ts` is the typed per-call `ProviderOptions` passthrough (token cap, `promptCache`, `responseFormat`, OpenRouter routing) each adapter maps onto its wire format |
 | `src/agent.ts` | `runNativeLoop` — the tool-use loop; `runConversation` (seeded messages in, transcript + structured answer out) and `runAgent` (one prompt in, prose out) are the adapters onto it, and `resolveLoopLimits` the one home for budget defaults |
+| `src/transcript.ts` | `settleMessages` / `withUserTurn` — pure helpers that answer a stored transcript's unanswered tool calls and append the next user turn; no storage |
 | `src/loop.ts` | The `Loop` seam + `nativeLoop` — the control loop as an extension point |
 | `src/events.ts` | `RunEvent` + `runEventEmitter` / `recordRunEvents` — the structured run stream the loop and `EngineContext` emit |
 | `src/tools/` | `Tool` + `primitiveTools` (generic) / `connectorTools`; `metadata.ts` (scoping + projections); `modelTool.ts` (a model surfaced as a tool). Domain tools are the application's, injected via `DomainToolFactory`. |
