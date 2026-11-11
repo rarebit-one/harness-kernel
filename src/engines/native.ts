@@ -4,7 +4,7 @@ import { runEventEmitter } from "../events.js"
 import { nativeLoop, runWithEvents, type Loop } from "../loop.js"
 import { asChatModel } from "../models/chat.js"
 import { providerAvailability, selectProvider } from "../providers/index.js"
-import { secretMasker, secretsToEnv } from "../secrets.js"
+import { secretMaskSet, secretsToEnv } from "../secrets.js"
 import { primitiveTools, connectorTools } from "../tools/registry.js"
 import { PrivateRunError, privateRunChannels } from "../private.js"
 import type { Tool, ToolContext } from "../tools/registry.js"
@@ -154,6 +154,9 @@ export class NativeEngine implements AgentEngine {
       ...primitiveTools(spec.workdir, env, allowed, allowHosts),
       ...this.domainTools(allowed),
     ]
+    // Connector credentials join the mask as the connection sends them, so a
+    // token rotated mid-run is masked like one the run started with.
+    const secrets = secretMaskSet(spec.secrets)
     // Connector tools are NOT re-gated by permissions.tools: the caller
     // already authorized them per connector (scope + grants) when it populated
     // connectors, and their names are namespaced `<connector>__<tool>`.
@@ -161,7 +164,10 @@ export class NativeEngine implements AgentEngine {
     // already opened when a cancel lands mid-setup.
     let connectors: Awaited<ReturnType<typeof connectorTools>>
     try {
-      connectors = await connectorTools(spec.connectors, undefined, { signal: ctx.signal })
+      connectors = await connectorTools(spec.connectors, undefined, {
+        signal: ctx.signal,
+        onSecret: secrets.add,
+      })
     } catch (err) {
       if (!ctx.signal?.aborted) throw err
       return canceledBeforeLoop(ctx)
@@ -169,7 +175,7 @@ export class NativeEngine implements AgentEngine {
     try {
       // The run's secrets live in run_code's env, so mask their values in
       // everything a tool hands back to the model.
-      const tools = maskToolOutput([...primitives, ...connectors.tools], secretMasker(spec.secrets))
+      const tools = maskToolOutput([...primitives, ...connectors.tools], secrets.mask)
       ctx.log(`tools: ${tools.map((t) => t.spec.name).join(", ") || "(none)"}`)
 
       // Budgets are resolved before the call: a loop is handed numbers, not
