@@ -16,7 +16,7 @@ around — the kernel never bends to a consumer.
 |------|------------|
 | `src/index.ts` | The public API. Anything not re-exported here is internal. |
 | `src/types.ts` | The three shared shapes callers hand in: `ConnectorConfig`, `Permissions`, `WorkflowDefinition`. What a run EMITS is not here — it is opaque, see `EngineResult.emissions`. |
-| `src/models/` | The `ModelInvocation` seam (`types.ts`), the `chat` kind + `Provider` adapter (`chat.ts`), the kind registry (`registry.ts`), middleware (`middleware.ts`) |
+| `src/models/` | The `ModelInvocation` seam (`types.ts`), the `chat` kind + `Provider` adapter (`chat.ts`), the kind registry (`registry.ts`), middleware (`middleware.ts`), the opt-in retry-and-fallback decorator (`retry.ts`) |
 | `src/routing/` | `RouteResolver` + the built-in `StaticRouteResolver` (capabilities as code) |
 | `src/context/` | `ContextProvider` chain — `assembleContext` / `renderContext` |
 | `src/providers/` | `Provider` interface + anthropic / openai / openrouter / local / mock / scripted adapters, `selectProvider` (+ `providerAvailability`, `ProviderCredentialsError`); `options.ts` is the typed per-call `ProviderOptions` passthrough (token cap, `promptCache`, `responseFormat`, OpenRouter routing) each adapter maps onto its wire format |

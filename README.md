@@ -555,6 +555,61 @@ in `supports()`, and stdio refuses it (its token is set at spawn).
 `ConnectorConfig.clientInfo` (`{ name, version? }`) replaces the default client
 identity announced to the server.
 
+### Retry and fallback
+
+The kernel retries nothing by itself beyond what the vendor SDKs do
+(`maxRetries`, default 2). A caller that needs more — a wait that knows the
+run's deadline, an honoured `Retry-After`, other models to try once the primary
+is exhausted — wraps its model in `withRetry` and turns the SDK's own retries
+off, so the two do not multiply:
+
+```ts
+import { chatModel, withRetry, OpenRouterProvider } from "@rarebit-one/harness-kernel"
+
+const primary = chatModel(new OpenRouterProvider(key, "vendor-a/large"))
+const backup = chatModel(new OpenRouterProvider(key, "vendor-b/medium"))
+
+const model = withRetry(primary, {
+  maxAttempts: 4,                              // per model, first call included
+  backoff: (n) => [1000, 2000, 3000][n - 1] ?? 3000, // or { baseMs, maxMs, jitter }
+  waitBudgetMs: 6000,                          // total wait across this wrapper's calls
+  deadlineAt: turnStartedAt + 45_000,          // never wait past the turn's deadline...
+  minCallMs: 10_000,                           // ...or leave the next call under 10 s
+  fallbacks: [backup],                         // explicit, ordered; none by default
+  stickyFallback: true,                        // once the primary is exhausted, skip it
+  onEvent: (e) => log(JSON.stringify(e)),      // each retry and fallback as it happens
+})
+
+await runConversation({ provider: model, providerOptions: { maxRetries: 0 }, ... })
+```
+
+Each failure is classified `retry` (try the same model again after a backoff,
+then move on), `fallback` (move to the next model now) or `fatal` (rethrow it
+unchanged). `defaultRetryClassifier` retries rate limits, timeouts, 5xx and
+dropped connections, and treats everything else as fatal: auth, payment, an
+invalid request, a refused credential or option, and any error it does not
+recognise. Pass `classify` to decide differently, for example to send a 5xx
+straight to the fallback. A server's `Retry-After` (or `retry-after-ms`)
+replaces the computed wait; one longer than the budget left is not shortened,
+since a shortened wait would only be refused again, so the chain moves on.
+
+On success `ModelResult.meta.retry` says what happened: which model `served`,
+its `position` in the chain, how many `attempts` were made, which models it
+`fellBackFrom` and how long it `waitedMs` (two adapters of one provider share
+an id, which is what `position` is for). The chat result's own `model`,
+`responseId` and `upstream` come from the model that answered, so `model.turn`
+events audit a fallback the same way they audit any turn. When the chain runs
+out, `RetryExhaustedError` carries every failure, the last as its `cause`. An
+abort stops a wait at once and is rethrown as the signal's reason, so the loop
+still ends `canceled` or `timed_out`, never `failed`.
+
+There is never an implicit fallback: an empty `fallbacks` means retry only.
+A streaming call is never retried once its sink has received output. And
+`private: true` (set it for a `RunSpec.private` run) refuses a fallback chain
+when the wrapper is built, because a fallback is exactly how a private run's
+material would reach another model; retrying its one model is still allowed.
+The wrapper is payload-generic, so it fits any model kind, not only chat.
+
 ### Recorded evals with `ScriptedProvider`
 
 ```ts
