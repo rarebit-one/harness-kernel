@@ -59,7 +59,7 @@ Every other engine and the whole native loop work without it. Running the
 |------|---------|
 | **Model seam** | `ModelInvocation` — one arrow for every model kind, with declared capabilities, a uniform result envelope and `probe()` |
 | **Providers** | `Provider` interface + `selectProvider()` over Anthropic, OpenAI, OpenRouter, a self-hosted `local` (any OpenAI-compatible server), an offline `mock` (by request) and a `ScriptedProvider` for recorded evals; `chatModel()` puts any of them on the seam; typed per-call `ProviderOptions` (prompt caching, token cap, response format, OpenRouter routing) |
-| **Agent loop** | `runConversation()` — a provider-neutral tool-use loop over a seeded conversation, with step and wall-clock budgets, terminal (final-answer) tools, summed usage and the served model in the result; `runAgent()` is its one-prompt form |
+| **Agent loop** | `runConversation()` — a provider-neutral tool-use loop over a seeded conversation, with step, wall-clock and optional cost budgets, terminal (final-answer) tools, summed usage and the served model in the result; `runAgent()` is its one-prompt form |
 | **Loop** | `Loop` + `nativeLoop` — the control loop as a seam; the kernel ships one and it is the loop `runAgent` and `runConversation` have always run |
 | **Run events** | `RunEvent` — an ordered, structured account of a run (turns, tool calls, budgets, outcome), emitted to an optional sink |
 | **Tools** | `Tool` (+ `ToolContext`), `primitiveTools()` (`run_code`, `read_file`, `list_files`, `http_fetch`), `connectorTools()`, `modelAsTool()`, metadata + projections (`replaySafeTools`, …) |
@@ -251,7 +251,7 @@ Every entry point takes an optional `AbortSignal` — `runAgent({ signal })`,
 const controller = new AbortController()
 const result = await engine.run(spec, { log, signal: controller.signal })
 // later: controller.abort("user canceled")
-result.outcome // "completed" | "steps_exhausted" | "timed_out" | "canceled" | "failed"
+result.outcome // "completed" | "steps_exhausted" | "timed_out" | "cost_exhausted" | "canceled" | "failed" | "suspended"
 ```
 
 The native loop merges it with its own wall-clock deadline and threads the
@@ -358,7 +358,7 @@ const result = await runConversation({
   providerOptions: { promptCache: {} },
 })
 
-result.stopReason // "end_turn" | "terminal_tool" | "steps_exhausted" | "timed_out" | "canceled" | "suspended"
+result.stopReason // "end_turn" | "terminal_tool" | "length" | "steps_exhausted" | "timed_out" | "cost_exhausted" | "canceled" | "suspended"
 result.terminal?.input // { text, quick_replies } when the model called `reply`
 result.messages // store this; seed the next turn with it
 result.pending // the external calls to execute when outcome is "suspended"
@@ -417,7 +417,7 @@ if (parked.outcome === "suspended") {
     system,
     messages: withToolResults(parked.messages, results),
     tools: [...tools, askHuman], // keep it: the model may ask again
-    ...remainingLimits({ maxSteps, maxDurationMs }, parked.consumed),
+    ...remainingLimits({ maxSteps, maxDurationMs, maxCostUsd }, parked.consumed),
   })
 }
 ```
@@ -430,13 +430,15 @@ closes each parked call in its own event stream, at step 0, as `tool.succeeded`
 or `tool.failed` with `reason: "rejected"`, so a consumer following the stream
 across both runs sees every `tool.pending` matched. `remainingLimits` carries
 the budget over, floored at one step and one minute so the first resumed step
-always runs; a resumed run is a continuation, not a fresh budget. A terminal
+always runs (a cost budget carries over as the limit minus the cost the parked
+run reported); a resumed run is a continuation, not a fresh budget. A terminal
 answer or a stop in the same step ends the run instead, and the parked calls
 are answered as not run so the transcript stays whole.
 
 **Budget visibility.** `budgetVisible: true` (off by default) appends one
 ephemeral user line to every request, `[budget] N of M step(s) and Ss remain`,
-counting down. It is never written into `messages`, and it rides after the
+counting down (with `, Ss and $X of cost` in place of `and Ss` under a cost
+budget). It is never written into `messages`, and it rides after the
 history so the cached prefix (system, tools, earlier turns) is untouched. The
 limits stay hard either way; the line only lets the model pace itself.
 
@@ -498,8 +500,24 @@ Usage carries what the provider prices: beside the token counts, `TokenUsage`
 has `cacheWriteTokens`, `reasoningTokens` and `reportedCost`
 (`{ amount, currency: "USD" }`, from OpenRouter's `usage.cost`) when the
 response reports them, on every `model.turn` event and summed by amount on the
-result, so a per-turn cost cap can abort the run through its `signal`. Absent
-means unknown, never free.
+result. Absent means unknown, never free.
+
+**Cost budget.** `maxCostUsd` (on `runConversation`/`runAgent`, `RunSpec.limits`
+for the native engine, `LoopLimits` for a loop) is a third budget beside steps
+and time, with no default: absent means unlimited. After each model turn the
+loop compares the run's summed `reportedCost` with it. Once it is reached, a
+turn that asked for tools ends the run before any of them start, with
+`outcome: "cost_exhausted"`, a `run.budget_exhausted` event of `kind: "cost"`,
+the accumulated prose plus a note, and every call of that turn answered as not
+run so the transcript resumes. No summary call is made, because it would spend
+past a limit already reached; a turn that answered in prose completes as usual.
+The turn that crosses the line is the overshoot, since its cost is known only
+after it returns. Only reported cost counts: a turn that reports none adds
+nothing (logged once per run), so under a provider that does not price its
+responses the limit sees only part of the spend, or none of it. The kernel carries no price
+table; to bring unpriced calls inside the limit, fill `usage.reportedCost` in a
+model `Middleware` from your own prices. Conversation-level or daily caps span
+runs and stay with the application. The out-of-process engines ignore it.
 
 Two more per-call knobs: `maxRetries` overrides the SDK retry count for one
 call (set `0` alongside an OpenRouter `models` chain, or the SDK and the router
