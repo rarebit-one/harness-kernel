@@ -57,6 +57,14 @@ export interface LoopRunOptions {
    */
   maxDurationMs?: number
   /**
+   * Cost budget for the whole loop in US dollars, counted from the cost each
+   * model call reports. Absent (the default) means unlimited. When reached, the
+   * run stops before running the tools the last turn asked for, with
+   * `outcome: "cost_exhausted"` and the accumulated prose. See
+   * `LoopLimits.maxCostUsd` for what counts and what an unpriced call does.
+   */
+  maxCostUsd?: number
+  /**
    * Tell the model, on every step, how many steps and how much time remain.
    * Off by default. Advisory only: the loop's limits stay hard. See
    * `LoopLimits.budgetVisible`.
@@ -168,11 +176,20 @@ const FALLBACK_MAX_TOOL_RESULT_BYTES = 64 * 1024
 export function resolveLoopLimits(limits?: {
   maxSteps?: number | undefined
   maxDurationMs?: number | undefined
+  maxCostUsd?: number | undefined
   budgetVisible?: boolean | undefined
 }): LoopLimits {
+  const maxCostUsd = limits?.maxCostUsd
+  // No default: a cost budget exists only when the caller set one. A NaN or a
+  // negative would make the comparison never (or always) fire, so it is
+  // refused rather than run as a limit that silently is not one.
+  if (maxCostUsd !== undefined && !(maxCostUsd >= 0)) {
+    throw new RangeError(`maxCostUsd must be a non-negative number, got ${maxCostUsd}`)
+  }
   return {
     maxSteps: limits?.maxSteps ?? DEFAULT_MAX_STEPS,
     maxDurationMs: limits?.maxDurationMs ?? defaultMaxDurationMs(),
+    ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(limits?.budgetVisible ? { budgetVisible: true } : {}),
   }
 }
@@ -196,6 +213,14 @@ export function remainingLimits(limits: LoopLimits, consumed: LoopConsumed): Loo
   return {
     maxSteps: Math.max(RESUME_MIN_STEPS, limits.maxSteps - consumed.steps),
     maxDurationMs: Math.max(RESUME_MIN_DURATION_MS, limits.maxDurationMs - consumed.durationMs),
+    // No floor is needed: the loop checks cost after a turn, so a resumed run's
+    // first step runs even on a zero budget. Only reported cost was counted, so
+    // only reported cost is subtracted.
+    ...(limits.maxCostUsd !== undefined
+      ? {
+          maxCostUsd: Math.max(0, limits.maxCostUsd - (consumed.usage?.reportedCost?.amount ?? 0)),
+        }
+      : {}),
     ...(limits.budgetVisible ? { budgetVisible: true } : {}),
   }
 }
@@ -410,13 +435,31 @@ function notAnswered(callId: string, why: string): ToolResult {
   return { toolCallId: callId, content: `not run: ${why}`, isError: true }
 }
 
-/** The one ephemeral line the model sees when `budgetVisible` is on. */
-function budgetLine(stepsLeft: number, maxSteps: number, msLeft: number): AgentMessage {
+/**
+ * The one ephemeral line the model sees when `budgetVisible` is on. The cost
+ * clause appears only under a cost limit, so a run without one sees exactly
+ * the line it always did.
+ */
+function budgetLine(
+  stepsLeft: number,
+  maxSteps: number,
+  msLeft: number,
+  costLeft?: number,
+): AgentMessage {
   const seconds = Math.max(0, Math.round(msLeft / 1000))
+  const left =
+    costLeft === undefined
+      ? `${stepsLeft} of ${maxSteps} step(s) and ${seconds}s`
+      : `${stepsLeft} of ${maxSteps} step(s), ${seconds}s and $${costLeft.toFixed(4)} of cost`
   return {
     role: "user",
-    text: `[budget] ${stepsLeft} of ${maxSteps} step(s) and ${seconds}s remain. Plan to finish within them.`,
+    text: `[budget] ${left} remain. Plan to finish within them.`,
   }
+}
+
+/** The cost a call reported, when it reported one. */
+function reportedAmount(usage: Usage | undefined): number | undefined {
+  return usage && !("units" in usage) ? usage.reportedCost?.amount : undefined
 }
 
 /** The finer reason a custom loop's bare outcome implies, when it reported none. */
@@ -471,10 +514,13 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
   })
   // `stopReason: "length"` is the plain case; a budget summary cut at the cap
   // ends `steps_exhausted` with `finishReason: "length"`, and its text is just
-  // as partial. A canceled or timed-out run is not judged here: the
-  // cancellation contract is that it resolves with its note, never rejects,
-  // even when the last turn to land before the stop happened to be cut.
-  const stopped = result.outcome === "canceled" || result.outcome === "timed_out"
+  // as partial. A canceled, timed-out or cost-stopped run is not judged here:
+  // the cancellation contract is that it resolves with its note, never
+  // rejects, even when the last turn to land before the stop happened to be cut.
+  const stopped =
+    result.outcome === "canceled" ||
+    result.outcome === "timed_out" ||
+    result.outcome === "cost_exhausted"
   if (!stopped && (result.stopReason === "length" || result.finishReason === "length")) {
     throw new TruncatedAnswerError(result)
   }
@@ -581,7 +627,7 @@ export async function runConversation(
  */
 export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Promise<LoopResult> {
   const { model, system, tools, providerOptions } = req
-  const { maxSteps, maxDurationMs } = req.limits
+  const { maxSteps, maxDurationMs, maxCostUsd } = req.limits
   const log = loopCtx.log
 
   // Checked before the first model call: a bad seed is a configuration error,
@@ -629,7 +675,17 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
     chatRequest(
       system,
       req.limits.budgetVisible && stepsLeft !== undefined
-        ? [...messages, budgetLine(stepsLeft, maxSteps, deadlineAt - Date.now())]
+        ? [
+            ...messages,
+            budgetLine(
+              stepsLeft,
+              maxSteps,
+              deadlineAt - Date.now(),
+              maxCostUsd !== undefined
+                ? Math.max(0, maxCostUsd - (usage?.reportedCost?.amount ?? 0))
+                : undefined,
+            ),
+          ]
         : messages,
       toolSpecs,
       undefined,
@@ -649,6 +705,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   let terminal: TerminalCall | undefined
   let lastFinish: FinishReason | undefined
   let cutOff = false
+  let unpricedNoted = false
   const responseIds: string[] = []
   let pending: ToolCall[] = []
 
@@ -781,6 +838,32 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
           messages.push({ role: "tool", results: calls.map((c) => notRun(c.id)) })
         }
         return stopped()
+      }
+
+      // The cost budget, checked once the turn's cost is known. Only what the
+      // calls reported counts: an unpriced turn is unknown, not free, and not
+      // a number either, so it is noted once and the limit runs on what was
+      // reported. A turn that answered in prose finishes the run as usual
+      // (nothing more would be spent); a turn that asked for tools is stopped
+      // before any of them start, like a stop that lands after the turn, and
+      // without the summary call the step budget gets — that call would spend
+      // past a limit that is already reached.
+      if (maxCostUsd !== undefined) {
+        if (reportedAmount(turnResult.usage) === undefined && !unpricedNoted) {
+          unpricedNoted = true
+          log(
+            `step ${step} reported no cost; the ${maxCostUsd} USD cost budget counts reported cost only`,
+          )
+        }
+        const spent = usage?.reportedCost?.amount
+        if (calls.length > 0 && spent !== undefined && spent >= maxCostUsd) {
+          messages.push({ role: "tool", results: calls.map((c) => notRun(c.id)) })
+          log(`reached cost budget (${maxCostUsd} USD, ${spent} reported) after step ${step}`)
+          events.emit({ type: "run.budget_exhausted", kind: "cost", step })
+          const accumulated = lastAssistantText || "(no output before the run was stopped)"
+          const text = `${accumulated}\n\n[run stopped: cost budget of ${maxCostUsd} USD reached]`
+          return result(text, "cost_exhausted", "cost_exhausted")
+        }
       }
 
       if (calls.length === 0) {

@@ -44,8 +44,14 @@ export interface RunSpec {
   provider: { preferred?: string | null } & ProviderSelection
   /** Optional budget overrides; engines that don't honour these ignore them.
    *  `budgetVisible` tells the native loop to show the model its remaining
-   *  steps and time on every turn (off by default). */
-  limits?: { maxSteps?: number; maxDurationMs?: number; budgetVisible?: boolean }
+   *  steps and time on every turn (off by default). `maxCostUsd` is honoured by
+   *  the native loop only (see `LoopLimits.maxCostUsd`). */
+  limits?: {
+    maxSteps?: number
+    maxDurationMs?: number
+    maxCostUsd?: number
+    budgetVisible?: boolean
+  }
   /**
    * A conversation to continue instead of a fresh task prompt: the stored
    * history of an earlier run (a `suspended` one, with the parked calls now
