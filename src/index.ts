@@ -92,6 +92,22 @@ export {
 } from "./models/middleware.js"
 export type { Middleware, Invoker, StreamInvoker } from "./models/middleware.js"
 
+// Opt-in retry and an explicit fallback chain around any model invocation.
+export {
+  withRetry,
+  defaultRetryClassifier,
+  errorStatus,
+  retryAfterMs,
+  RetryExhaustedError,
+} from "./models/retry.js"
+export type {
+  RetryOptions,
+  RetryDecision,
+  RetryEvent,
+  RetryReport,
+  BackoffOptions,
+} from "./models/retry.js"
+
 // ---------------------------------------------------------------------------
 // Extension point 2 — route resolution (capability → model + prompt + tools)
 // ---------------------------------------------------------------------------
