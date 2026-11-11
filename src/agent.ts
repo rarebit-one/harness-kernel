@@ -31,6 +31,7 @@ import type {
 import { executeTool, type Tool } from "./tools/registry.js"
 import { toToolSpecs, toolDispatch, type ToolMetadata } from "./tools/metadata.js"
 import { assertToolConcurrency, runInSegments, type ToolConcurrency } from "./tools/concurrency.js"
+import { invalidInputRefusal } from "./tools/validate.js"
 
 /** What {@link runAgent} and {@link runConversation} share. */
 export interface LoopRunOptions {
@@ -71,6 +72,15 @@ export interface LoopRunOptions {
    * `LoopLimits.budgetVisible`.
    */
   budgetVisible?: boolean
+  /**
+   * Check each tool call's arguments against the tool's `inputSchema` before
+   * running it. Off by default. A call that does not fit is not run: the model
+   * gets an error result naming the failing arguments, `tool.failed` reports
+   * `reason: "invalid_input"`, and a terminal call refused this way does not
+   * end the run. Applies to every tool the run has, connector tools included;
+   * see `validateToolInput` for the subset of JSON Schema it checks.
+   */
+  validateToolInput?: boolean
   /**
    * Cancels the run. On abort the in-flight model request and tool are
    * stopped, no summary call is made, and the run resolves (never rejects)
@@ -593,6 +603,7 @@ export async function runConversation(
       limits: resolveLoopLimits(options),
       ...(options.providerOptions ? { providerOptions: options.providerOptions } : {}),
       ...(options.toolConcurrency ? { toolConcurrency: options.toolConcurrency } : {}),
+      ...(options.validateToolInput ? { validateToolInput: true } : {}),
     },
     {
       log,
@@ -951,6 +962,23 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
             error: refusal,
           })
           return { result: { toolCallId: call.id, content: refusal, isError: true } }
+        }
+        // A whole call that does not fit its tool's schema, on a run that asked
+        // for the check. Refused like a cut-off call, before it can run or park:
+        // the model is told what to fix and answers again within its budgets,
+        // and no retry is the loop's. A terminal call refused here is no answer.
+        const invalid = req.validateToolInput ? invalidInputRefusal(tool, call.input) : undefined
+        if (invalid !== undefined) {
+          log(`tool ${call.name} refused: invalid input`)
+          events.emit({
+            type: "tool.failed",
+            step,
+            callId: call.id,
+            name: call.name,
+            reason: "invalid_input",
+            error: invalid,
+          })
+          return { result: { toolCallId: call.id, content: invalid, isError: true } }
         }
         // An external tool is the caller's to run. The call is parked, not
         // executed, and the run ends `suspended` once this step's server-side

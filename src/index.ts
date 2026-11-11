@@ -228,6 +228,8 @@ export type {
 export type { ToolConcurrency } from "./tools/concurrency.js"
 export { terminalTool } from "./tools/terminal.js"
 export type { TerminalToolOptions } from "./tools/terminal.js"
+export { validateToolInput } from "./tools/validate.js"
+export type { ToolInputProblem } from "./tools/validate.js"
 export { modelAsTool } from "./tools/modelTool.js"
 export type { ModelToolOptions } from "./tools/modelTool.js"
 

@@ -59,6 +59,11 @@ export interface LoopRequest {
    * runs every call in series, in the model's order. See {@link ToolConcurrency}.
    */
   toolConcurrency?: ToolConcurrency
+  /**
+   * Check each call's arguments against its tool's `inputSchema` before it
+   * runs. Off by default. See `LoopRunOptions.validateToolInput`.
+   */
+  validateToolInput?: boolean
 }
 
 /**
