@@ -28,6 +28,7 @@ import type { TokenUsage } from "./models/types.js"
 import type { ProviderOptions } from "./providers/options.js"
 import type { AgentMessage, FinishReason, ToolCall } from "./providers/types.js"
 import type { Tool, ToolOutput } from "./tools/registry.js"
+import type { ToolConcurrency } from "./tools/concurrency.js"
 
 /**
  * One run's materials, resolved.
@@ -53,6 +54,11 @@ export interface LoopRequest {
   limits: LoopLimits
   /** Sent on every model call this loop makes, the budget summary included. */
   providerOptions?: ProviderOptions
+  /**
+   * Run a step's concurrency-safe tool calls in parallel. Absent (the default)
+   * runs every call in series, in the model's order. See {@link ToolConcurrency}.
+   */
+  toolConcurrency?: ToolConcurrency
 }
 
 /**
