@@ -7,6 +7,7 @@ import type {
   ToolSpec,
 } from "../providers/types.js"
 import {
+  CapabilityError,
   requireCapability,
   type Health,
   type InvokeContext,
@@ -39,7 +40,11 @@ export type ChatPart =
  * valid `ChatRequest`.
  */
 export interface ChatRequest extends ConverseRequest {
-  /** Attachments for the latest user turn. Requires `caps.multimodalInput`. */
+  /**
+   * Attachments for the latest user turn. Requires `caps.multimodalInput`, and
+   * a `chatModel` over a `Provider` refuses them outright: no adapter sends
+   * them yet.
+   */
   parts?: ChatPart[]
 }
 
@@ -62,11 +67,13 @@ export const CHAT_KIND = "chat"
  *
  * Capabilities are reported conservatively, from what the `Provider` interface
  * can actually express: it has no streaming method and no attachment channel,
- * so those stay false. `usage` follows the provider's own `reportsUsage`
- * declaration: the SDK-backed adapters set it (their `ConverseResult.usage`
- * becomes `ModelResult.usage`), while a provider that declares nothing — the
- * mock, a custom provider — reports `usage: false` rather than promising
- * accounting it does not deliver.
+ * so those stay false. A request carrying `parts` is refused with a
+ * `CapabilityError` even when `multimodalInput` is passed in `caps`, because
+ * there is no channel to forward them on. `usage` follows the provider's own
+ * `reportsUsage` declaration: the SDK-backed adapters set it (their
+ * `ConverseResult.usage` becomes `ModelResult.usage`), while a provider that
+ * declares nothing — the mock, a custom provider — reports `usage: false`
+ * rather than promising accounting it does not deliver.
  */
 export function chatModel(provider: Provider, caps: Partial<ModelCaps> = {}): ChatModel {
   const resolved: ModelCaps = {
@@ -88,6 +95,13 @@ export function chatModel(provider: Provider, caps: Partial<ModelCaps> = {}): Ch
           { id: provider.name, kind: CHAT_KIND, caps: resolved },
           "multimodalInput",
           "request carries parts",
+        )
+        // A declared capability is not a channel: `ConverseRequest` has nowhere
+        // to put an attachment, so forwarding would drop it. Refuse instead.
+        throw new CapabilityError(
+          { id: provider.name, kind: CHAT_KIND, caps: resolved },
+          "multimodalInput",
+          "the Provider interface has no attachment channel, so parts would be dropped",
         )
       }
       if (req.tools.length > 0) {
