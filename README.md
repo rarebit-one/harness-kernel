@@ -434,6 +434,45 @@ always runs; a resumed run is a continuation, not a fresh budget. A terminal
 answer or a stop in the same step ends the run instead, and the parked calls
 are answered as not run so the transcript stays whole.
 
+**Settling a stored transcript.** A transcript the kernel returns from a
+finished, stopped or cut-off run is already whole, but a `suspended` one ends on
+the parked calls, and a transcript an application built, cut or appended to
+itself may leave calls unanswered anywhere. Every provider rejects a tool call
+with no result. `settleMessages` answers each missing one (into the tool turn
+that follows its assistant turn, else as a new tool turn after it) and leaves
+answered calls alone, so settling twice changes nothing. `withUserTurn` settles
+and appends the next user message, and its output always passes the loop's seed
+check:
+
+```ts
+import { settleMessages, withToolResults, withUserTurn } from "@rarebit-one/harness-kernel"
+
+// The user moved on instead of answering what the last run parked:
+// the parked calls are closed as not run, then the new message follows.
+const next = withUserTurn(stored, incoming)
+
+// Or say why, per call:
+const declined = withUserTurn(stored, incoming, {
+  answer: (call) => ({ content: `${call.name} was abandoned`, isError: true, rejected: true }),
+})
+
+// A resume where the caller answered only some parked calls; settle closes the rest.
+const resume = settleMessages(withToolResults(parked.messages, results))
+```
+
+Without `answer`, a missing result is `{ content: "not run: the turn ended
+before this tool call was answered", isError: true }`. Settle after
+`withToolResults`, never before: the other way round gives a parked call its
+placeholder and then its real result, and providers refuse two results for one
+call. What the loop never writes throws rather than being dropped: a tool turn
+that answers no call (no assistant turn before it, or a result for a call id
+that turn never made), two results for one call, two calls with one id, and one
+turn's results split across consecutive tool turns. A tool turn settle completes
+lists its results in call order. Both helpers are pure: no I/O, nothing stored, and neither array is
+mutated. They do not window or trim history, and they carry no budget: pass
+fresh limits for a per-turn budget, or `remainingLimits(limits, consumed)` to
+spend one budget across turns.
+
 **Budget visibility.** `budgetVisible: true` (off by default) appends one
 ephemeral user line to every request, `[budget] N of M step(s) and Ss remain`,
 counting down. It is never written into `messages`, and it rides after the
