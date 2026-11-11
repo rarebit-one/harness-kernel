@@ -75,7 +75,8 @@ Each has a one-line reason here; the full text is in
   is logged and skipped, never fatal.
 - **One automated quality loop, and it is the model's.** The loop retries
   nothing for quality: a summary after the step budget, a refusal of a cut-off
-  call, a stop on cancel or deadline, and that is all. Reflect-and-retry nodes,
+  call (and, when the run asks, of a call that misses its schema), a stop on
+  cancel or deadline, and that is all. Reflect-and-retry nodes,
   context resets and "try again" wrappers belong to an application that has
   measured they help; a model driving its own revisions must not compete with
   a harness doing the same.

@@ -204,6 +204,7 @@ export class NativeEngine implements AgentEngine {
           tools,
           limits: resolveLoopLimits(spec.limits),
           ...(spec.providerOptions ? { providerOptions: spec.providerOptions } : {}),
+          ...(spec.validateToolInput ? { validateToolInput: true } : {}),
         },
         // The bookends come from `runWithEvents`, so an application's own loop
         // gets them without having to know they exist.
