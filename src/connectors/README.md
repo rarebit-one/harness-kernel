@@ -9,6 +9,33 @@ OAuth flow, and resolves a **fresh bearer token** into `ConnectorConfig.auth.tok
 before each run. The kernel treats tokens as opaque and only attaches them (as a
 request header for HTTP transports, or an env var for stdio).
 
+When the credential expires before the run ends (a short-lived token minted by a
+credential service), set `auth.headers` instead of `auth.token`: a function,
+async allowed, that returns the headers for one request. It is asked before
+every request the HTTP transports make (the initialize, each tool call, the
+event stream), so a rotated credential is used from the next request on; cache
+inside it if minting is costly. When the server answers 401 it is asked again
+with `refresh: true` and that request is sent once more; a second 401 fails as
+usual. Refresh beyond that one retry is the caller's job.
+
+- A throw, or a return that is not a map of string values, fails the request
+  with `connector <name>: auth headers …`. The function's own error is the
+  `cause`, never the message, because it can quote the credential. At connect
+  time that fails the run; mid-run it fails that tool call.
+- `connectMcp(config, { onSecret })` (and `connectorTools(..., { onSecret })`)
+  hears every credential as it is sent: a static token, and each value the
+  function returns plus the part after its scheme (`Bearer abc` also yields
+  `abc`). The native engine feeds these into the run's secret mask, so a token
+  rotated mid-run is masked in tool output like one the run started with.
+- Setting both `token` and `headers` is refused, and so is `headers` on a
+  stdio connector, whose token is fixed at spawn. The out-of-process engines
+  refuse a run with `headers` in `supports()`; under `vm` isolation it counts
+  as an exposed credential.
+
+`clientInfo` (`{ name, version? }`) replaces the client identity announced to
+the server; absent, it is `MCP_CLIENT_NAME` suffixed with the connector's name,
+at version `0.1.0`.
+
 `connectorTools()` in [`../tools/registry.ts`](../tools/registry.ts) turns a set
 of connectors into agent tools, namespaced `<connector>__<tool>` to avoid
 collisions, and returns a `close()` for the caller to invoke when the run ends.

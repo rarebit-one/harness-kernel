@@ -6,6 +6,7 @@
 // Shared shapes callers hand in
 // ---------------------------------------------------------------------------
 export type { ConnectorConfig, Permissions, WorkflowDefinition } from "./types.js"
+export type { ConnectorAuthHeaders, ConnectorAuthRequest } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Providers — the model adapters and their selection
@@ -227,7 +228,7 @@ export type { DownloadOptions } from "./primitives/download.js"
 // MCP connectors
 // ---------------------------------------------------------------------------
 export { connectMcp, MCP_CLIENT_NAME } from "./connectors/mcpClient.js"
-export type { McpConnection, McpCallOptions } from "./connectors/mcpClient.js"
+export type { McpConnection, McpCallOptions, ConnectMcpOptions } from "./connectors/mcpClient.js"
 
 // ---------------------------------------------------------------------------
 // Engines — the pluggable-harness seam
