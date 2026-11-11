@@ -215,6 +215,7 @@ export {
   toolsRequiringConfirmation,
   replaySafeTools,
   toolDispatch,
+  isConcurrencySafe,
 } from "./tools/metadata.js"
 export type {
   ToolMetadata,
@@ -224,6 +225,7 @@ export type {
   ClientResultVisibility,
   ToolDispatch,
 } from "./tools/metadata.js"
+export type { ToolConcurrency } from "./tools/concurrency.js"
 export { terminalTool } from "./tools/terminal.js"
 export type { TerminalToolOptions } from "./tools/terminal.js"
 export { modelAsTool } from "./tools/modelTool.js"

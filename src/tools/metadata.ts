@@ -37,8 +37,9 @@ export type ResultRetention = "ephemeral" | "standard" | "persistent"
  *   - `terminal` — run it, append its result, then END the loop with the call
  *                  as the structured answer. A final-answer tool. The other
  *                  calls of the same assistant turn still run (in order), so
- *                  the transcript stays whole; the first terminal call that
- *                  succeeds is the answer.
+ *                  the transcript stays whole; the first terminal call, in the
+ *                  model's order, that succeeds is the answer, even when calls
+ *                  ran in parallel and a later one finished first.
  *   - `external` — the loop does not run it: the call is parked on
  *                  `LoopResult.pending`, the run ends `suspended`, and the
  *                  caller resumes the conversation with the call's result (or
@@ -99,6 +100,15 @@ export interface ToolMetadata {
    * kernel only records the claim; deciding to replay is the application's.
    */
   replay?: "safe" | "unsafe"
+  /**
+   * The tool may run at the same time as other calls of the same step: it has
+   * no effect another call could observe or race (a read, a lookup). Absent
+   * means it makes no such claim, and it runs alone. The loop never reads this
+   * itself; a run that opts into parallel calls passes a predicate
+   * (`toolConcurrency.concurrencySafe`), and `isConcurrencySafe` honours this
+   * field.
+   */
+  concurrencySafe?: boolean
   resultRetention?: ResultRetention
   clientResultVisibility?: ClientResultVisibility
 }
@@ -174,6 +184,14 @@ export function toolsRequiringConfirmation(tools: Tool[]): Tool[] {
  */
 export function replaySafeTools(tools: Tool[]): Tool[] {
   return tools.filter((tool) => tool.meta?.replay === "safe")
+}
+
+/**
+ * Whether a tool declared `concurrencySafe: true`. The predicate to pass as
+ * `toolConcurrency.concurrencySafe` when the tools' own claims are the policy.
+ */
+export function isConcurrencySafe(tool: Tool): boolean {
+  return tool.meta?.concurrencySafe === true
 }
 
 /** Look up the tool that undoes `name`, when one is declared and reversible. */
