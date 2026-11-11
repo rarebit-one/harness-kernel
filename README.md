@@ -373,8 +373,35 @@ so the transcript carries no dangling call, and then ends the run with
 `stopReason: "terminal_tool"` and the call on `result.terminal`. An executor
 that throws turns the call into an ordinary tool error the model gets to
 correct. `terminalTool()` builds one with a no-op executor; the structured
-answer is the call's `input`, which the kernel does not validate against the
-schema (run your own validator on it, or supply an executor that throws).
+answer is the call's `input`. By default the kernel does not check it against
+the schema; see **Argument validation** below, or supply an executor that
+throws for rules a schema cannot express.
+
+**Argument validation.** `validateToolInput: true` (off by default; also on
+`RunSpec` for the native engine) checks every call's arguments against its
+tool's `inputSchema` before the call runs or parks. A call that does not fit
+is not run: the model gets an error result naming each failing argument by
+JSON Pointer (`invalid arguments for reply; the call was not run. … /text: is
+required`), the stream records `tool.failed` with reason `invalid_input`, and
+a terminal call refused this way does not end the run. This is a refusal, the
+same family as the cut-off refusal below, not a retry: the loop makes no extra
+model call, and the model corrects the call within its own step budget. The
+check covers the JSON Schema that tool schemas use (`type`, `properties`,
+`required`, `additionalProperties`, `enum`, `const`, `items`, the length, size
+and range bounds, `pattern`, `allOf`/`anyOf`/`oneOf`, local `$ref`s) and
+ignores every other keyword (`format`, `not`, `if`/`then`/`else`, …), so it can
+miss a bad call but never refuses one the schema accepts. That is why it also
+applies to MCP connector tools, whose schemas the server supplies: a server
+keyword the check does not know is skipped, not guessed at, and a bad call is
+caught before the round trip. OpenAPI's `nullable` is honoured, and a schema
+declaring draft 03–07 has its `$ref` siblings ignored as those drafts did; a
+schema the check cannot read lets the call through rather than failing the
+run. One caution: `pattern` runs synchronously on the model's input, so a
+pattern with catastrophic backtracking can stall the run past its deadline;
+turn validation on only for tools whose schemas you would run that way.
+`validateToolInput(schema, input)` is exported
+for a caller that wants the same check elsewhere (on `terminal.input`, or in
+its own loop); it returns `{ path, message }[]`, empty when the input fits.
 
 The seed must end with a user message or with the tool results the model is
 waiting for; the loop copies it and never mutates the array it was handed.

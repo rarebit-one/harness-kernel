@@ -213,7 +213,14 @@ export function privateRunChannels(
   }
 }
 
-const FAILURE_REASONS = ["threw", "unknown_tool", "aborted", "truncated", "rejected"] as const
+const FAILURE_REASONS = [
+  "threw",
+  "unknown_tool",
+  "aborted",
+  "truncated",
+  "rejected",
+  "invalid_input",
+] as const
 const FINISH_REASONS = ["stop", "tool_calls", "length", "content_filter", "unknown"] as const
 
 /** A known finish reason; anything else is dropped. */

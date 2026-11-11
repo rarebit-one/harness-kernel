@@ -53,6 +53,11 @@ export interface LoopRequest {
   limits: LoopLimits
   /** Sent on every model call this loop makes, the budget summary included. */
   providerOptions?: ProviderOptions
+  /**
+   * Check each call's arguments against its tool's `inputSchema` before it
+   * runs. Off by default. See `LoopRunOptions.validateToolInput`.
+   */
+  validateToolInput?: boolean
 }
 
 /**

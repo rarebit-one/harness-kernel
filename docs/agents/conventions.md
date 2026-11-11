@@ -83,7 +83,10 @@ Moved verbatim from the former `CLAUDE.md`; `AGENTS.md` keeps a one-line summary
   policy is leaking in.
 - **One automated quality loop.** The loop's only retries are infrastructure:
   it never re-asks the model for a better answer, never resets context, never
-  scores output. Those are an application's experiments to run and own; a
+  scores output. Refusing a call (one the output cap cut off, or, when the run
+  asks for `validateToolInput`, one that misses its schema) is not a retry: the
+  call is answered with an error, the loop makes no extra model call, and
+  whether to call again is the model's decision within its own budgets. Those are an application's experiments to run and own; a
   second loop over a model that already revises its own work makes both worse.
 - **TypeScript strict**; `tsc --noEmit` and `eslint` must be clean (CI gates
   both, plus `prettier --check` and the `dist/index.d.ts` emit check).

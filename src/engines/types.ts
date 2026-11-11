@@ -64,6 +64,13 @@ export interface RunSpec {
    */
   providerOptions?: ProviderOptions
   /**
+   * Check each tool call's arguments against the tool's `inputSchema` before
+   * the native loop runs it (off by default; see
+   * `LoopRunOptions.validateToolInput`). An out-of-process engine, whose
+   * harness dispatches its own tool calls, ignores it like it ignores `limits`.
+   */
+  validateToolInput?: boolean
+  /**
    * How strongly the caller isolated this run from every other run on the host:
    * `none` (a shared process), `container` (one per run) or `vm` (a microVM per
    * run). Out-of-process engines refuse anything below `container`, and only
