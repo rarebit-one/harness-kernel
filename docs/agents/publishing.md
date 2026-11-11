@@ -43,11 +43,12 @@ needs bootstrapping, this is the sequence, not a bug to debug.
 
 **Going public STRANDS self-hosted CI.** Every org runner group sets
 `allows_public_repositories: false` — correct, since a public repo means fork
-PRs. This repo had `RUNNER_LABEL=hyperion`, so the moment it went public every
-job queued forever with **nothing red**. The fix was deleting the repo variable
-so `runs-on` falls through to the workflows' `|| 'ubuntu-latest'` fallback,
-which costs nothing: public repos get unlimited hosted minutes. **Any repo that
-goes public next needs the same variable removed, in the same breath.**
+PRs. This repo had `RUNNER_LABEL` set to a self-hosted label, so the moment it
+went public every job queued forever with **nothing red**. The fix was deleting
+the repo variable so `runs-on` falls through to the workflows'
+`|| 'ubuntu-latest'` fallback, which costs nothing: public repos get unlimited
+hosted minutes. **Any repo that goes public next needs the same variable
+removed, in the same breath.**
 
 ## Prereleases
 

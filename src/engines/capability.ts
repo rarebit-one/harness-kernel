@@ -89,7 +89,7 @@ export function resolveWithin(dir: string, relPath: string): string {
  *
  * Application-specific capabilities (emitting an issue, promoting knowledge)
  * live in the application and are composed alongside this one — see
- * `capabilityToolsFor` on the engines.
+ * `CapabilityToolFactory` and the codex engine's `capabilityServerScript`.
  */
 export function writeFileCapability(ctx: CapabilityContext): CapabilityTool {
   return {

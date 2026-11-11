@@ -155,16 +155,31 @@ describe("capability gating", () => {
     ).rejects.toThrow(/does not support multimodalInput/)
   })
 
-  it("accepts multimodal parts once the adapter declares the capability", async () => {
+  it("refuses multimodal parts even when declared, rather than dropping them", async () => {
+    const provider = new MockProvider()
+    const converse = vi.spyOn(provider, "converse")
+    const model = chatModel(provider, { multimodalInput: true })
+    expect(model.caps.multimodalInput).toBe(true)
+
+    await expect(
+      model.invoke(
+        {
+          system: "s",
+          messages: [{ role: "user", text: "what is this?" }],
+          tools: [],
+          parts: [{ type: "image", source: { kind: "url", url: "https://example/i.png" } }],
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/parts would be dropped/)
+    expect(converse).not.toHaveBeenCalled()
+  })
+
+  it("still serves a declared-multimodal chat model when no parts are sent", async () => {
     const model = chatModel(new MockProvider(), { multimodalInput: true })
 
     const result = await model.invoke(
-      {
-        system: "s",
-        messages: [{ role: "user", text: "what is this?" }],
-        tools: [],
-        parts: [{ type: "image", source: { kind: "url", url: "https://example/i.png" } }],
-      },
+      { system: "s", messages: [{ role: "user", text: "hello" }], tools: [] },
       ctx(),
     )
 
