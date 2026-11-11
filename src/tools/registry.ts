@@ -1,7 +1,7 @@
 import { runCode } from "../primitives/codeExec.js"
 import { httpFetch } from "../primitives/http.js"
 import { readSandboxFile, listFiles, type SandboxRead } from "../primitives/fs.js"
-import { connectMcp, type McpConnection } from "../connectors/mcpClient.js"
+import { connectMcp, type ConnectMcpOptions, type McpConnection } from "../connectors/mcpClient.js"
 import type { ConnectorConfig } from "../types.js"
 import type { ToolSpec } from "../providers/types.js"
 import type { ToolMetadata } from "./metadata.js"
@@ -235,14 +235,19 @@ export const namespacedToolName: ConnectorToolName = (connector, tool) => `${con
  * `<connector>__<tool>` by default so two connectors cannot collide; pass
  * `toolName` to name them differently (a single-connector application may
  * want the server's own names, so its prompts and its tool names match).
- * Returns a `close` to tear down the connections when the run ends.
+ * Returns a `close` to tear down the connections when the run ends. `onSecret`
+ * is handed to `connect` and hears every connector credential, including each
+ * rotated one an `auth.headers` function returns mid-run.
  */
 export async function connectorTools(
   connectors: ConnectorConfig[],
-  connect: (config: ConnectorConfig) => Promise<McpConnection> = connectMcp,
-  opts: { signal?: AbortSignal; toolName?: ConnectorToolName } = {},
+  connect: (
+    config: ConnectorConfig,
+    opts?: ConnectMcpOptions,
+  ) => Promise<McpConnection> = connectMcp,
+  opts: { signal?: AbortSignal; toolName?: ConnectorToolName } & ConnectMcpOptions = {},
 ): Promise<{ tools: Tool[]; close: () => Promise<void> }> {
-  const { signal } = opts
+  const { signal, onSecret } = opts
   const nameFor = opts.toolName ?? namespacedToolName
   const connections: McpConnection[] = []
   // Each setup await stops waiting the moment `signal` aborts, so a stalled
@@ -266,7 +271,7 @@ export async function connectorTools(
     for (const config of connectors) {
       if (config.kind !== "mcp") continue
 
-      const connecting = connect(config)
+      const connecting = onSecret ? connect(config, { onSecret }) : connect(config)
       let conn: McpConnection
       try {
         conn = await step(connecting)
