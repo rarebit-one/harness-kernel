@@ -594,7 +594,11 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   // neither a cancel nor the deadline has to wait for an in-flight step to end.
   const deadline = deadlineSignal(maxDurationMs)
   const signal = loopCtx.signal ? AbortSignal.any([loopCtx.signal, deadline]) : deadline
-  const ctx: InvokeContext = { log, signal, budget: { maxDurationMs } }
+  const ctx: InvokeContext = {
+    log,
+    signal,
+    budget: { maxDurationMs, deadlineAt: Date.now() + maxDurationMs },
+  }
   // The emitter is the caller's: `seq` is per RUN, not per loop, so a loop that
   // made its own would restart the numbering mid-stream.
   const events = loopCtx.events
