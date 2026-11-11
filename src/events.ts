@@ -76,9 +76,20 @@ export interface RunEventBase {
  * two call for different responses — one was asked for, the other was not. In
  * the native loop both are clean stops that return the accumulated prose, never
  * a throw.
+ *
+ * `cost_exhausted` is the third budget beside steps and time: the run's summed
+ * reported cost reached `LoopLimits.maxCostUsd` while the model still wanted
+ * tools. Like `timed_out` it is a clean stop with the accumulated prose and no
+ * summary call; it appears only when the caller set a cost limit.
  */
 export type RunOutcome =
-  "completed" | "steps_exhausted" | "timed_out" | "canceled" | "failed" | "suspended"
+  | "completed"
+  | "steps_exhausted"
+  | "timed_out"
+  | "cost_exhausted"
+  | "canceled"
+  | "failed"
+  | "suspended"
 
 /**
  * Why the loop stopped, one level finer than {@link RunOutcome}. `end_turn` and
@@ -99,6 +110,7 @@ export type StopReason =
   | "length"
   | "steps_exhausted"
   | "timed_out"
+  | "cost_exhausted"
   | "canceled"
   | "failed"
   | "suspended"
@@ -110,8 +122,8 @@ export type StopReason =
  */
 export type ToolReplay = "safe" | "unsafe"
 
-/** Which budget ran out. */
-export type BudgetKind = "steps" | "duration"
+/** Which budget ran out. `cost` appears only when the caller set `maxCostUsd`. */
+export type BudgetKind = "steps" | "duration" | "cost"
 
 /** The loop is about to take its first turn. Carries the resolved budgets and
  *  the names of the tools the loop was handed, which is the surface the model
@@ -123,6 +135,8 @@ export interface RunStartedEvent extends RunEventBase {
   type: "run.started"
   maxSteps: number
   maxDurationMs: number
+  /** The cost budget in US dollars, when the caller set one; absent means unlimited. */
+  maxCostUsd?: number
   tools: string[]
   /** UTF-8 bytes of the tool specs (names, descriptions, input schemas) handed
    *  to the model: the size of the catalog it reads on every turn. Absent from
