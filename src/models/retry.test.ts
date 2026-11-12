@@ -456,6 +456,74 @@ describe("withRetry", () => {
     expect(result.text).toBe("answered")
     expect(result.model).toBe("small-model")
   })
+
+  it("names the fallback that served as the run's provider, the primary when it served", async () => {
+    let primaryUp = false
+    const primary = {
+      name: "primary",
+      converse: () =>
+        primaryUp
+          ? Promise.resolve({ text: "from primary", toolCalls: [] })
+          : Promise.reject(apiError(503)),
+    }
+    const backup = new ScriptedProvider([{ text: "from backup", toolCalls: [] }], {
+      name: "backup",
+    })
+    const model = withRetry(chatModel(primary), {
+      ...(fakeTime() as RetryOptions<never, never>),
+      maxAttempts: 1,
+      fallbacks: [chatModel(backup)],
+    })
+    const run = () =>
+      runConversation({
+        provider: model,
+        system: "",
+        messages: [{ role: "user", text: "hi" }],
+        tools: [],
+        log: () => {},
+      })
+
+    const fellBack = await run()
+    expect(fellBack.text).toBe("from backup")
+    expect(fellBack.provider).toBe("backup")
+
+    primaryUp = true
+    const direct = await run()
+    expect(direct.text).toBe("from primary")
+    expect(direct.provider).toBe("primary")
+  })
+
+  it("reports the provider of the last call when the steps were served by different models", async () => {
+    let call = 0
+    const primary = {
+      name: "primary",
+      converse: () => {
+        call++
+        // The first step is served by the primary; the second falls back.
+        return call === 1
+          ? Promise.resolve({ text: "", toolCalls: [{ id: "t", name: "echo", input: {} }] })
+          : Promise.reject(apiError(503))
+      },
+    }
+    const backup = new ScriptedProvider([{ text: "done", toolCalls: [] }], { name: "backup" })
+    const echo: Tool = {
+      spec: { name: "echo", description: "echo", inputSchema: { type: "object" } },
+      execute: () => Promise.resolve("ok"),
+    }
+    const result = await runConversation({
+      provider: withRetry(chatModel(primary), {
+        ...(fakeTime() as RetryOptions<never, never>),
+        maxAttempts: 1,
+        fallbacks: [chatModel(backup)],
+      }),
+      system: "",
+      messages: [{ role: "user", text: "hi" }],
+      tools: [echo],
+      log: () => {},
+    })
+    expect(result.text).toBe("done")
+    expect(result.provider).toBe("backup")
+  })
 })
 
 // ── Review regressions ───────────────────────────────────────────────────────

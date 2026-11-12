@@ -17,6 +17,7 @@ import {
   type TerminalCall,
 } from "./loop.js"
 import { asChatModel, chatRequest, type ChatModel } from "./models/chat.js"
+import { servedBy } from "./models/retry.js"
 import { deadlineSignal, isAbortError } from "./signals.js"
 import type { InvokeContext, TokenUsage, Usage } from "./models/types.js"
 import type { ProviderOptions } from "./providers/options.js"
@@ -149,7 +150,11 @@ export interface ConversationResult {
   pending?: ToolCall[]
   /** What this run spent: steps, wall-clock ms and usage. */
   consumed: LoopConsumed
-  /** Which adapter served the run (`"anthropic"`, `"openrouter"`, `"mock"`, a custom model's id). */
+  /**
+   * Which adapter served the run (`"anthropic"`, `"openrouter"`, `"mock"`, a
+   * custom model's id). Behind `withRetry`, the fallback that answered the
+   * last call when it was not the primary.
+   */
   provider: string
   /** The model id the last response named, else the adapter's configured model. */
   model?: string
@@ -735,6 +740,9 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   let usage: TokenUsage | undefined
   let servedModel: string | undefined
   let servedUpstream: string | undefined
+  // The invocation that answered the last call, when a retry wrapper served it
+  // from somewhere other than the model this run was given.
+  let servedProvider: string | undefined
   let terminal: TerminalCall | undefined
   let lastFinish: FinishReason | undefined
   let cutOff = false
@@ -749,7 +757,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
     outcome,
     stopReason,
     messages,
-    provider,
+    provider: servedProvider ?? provider,
     responseIds,
     consumed: {
       steps: stepsTaken,
@@ -848,6 +856,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
       // clears an earlier value rather than letting it stand in an audit.
       servedModel = turn.model
       servedUpstream = turn.upstream
+      servedProvider = servedBy(turnResult.meta)
       if (turn.responseId) responseIds.push(turn.responseId)
       lastFinish = turn.finishReason
       events.emit({
@@ -1162,6 +1171,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
       usage = addUsage(usage, summaryResult.usage)
       servedModel = summary.model
       servedUpstream = summary.upstream
+      servedProvider = servedBy(summaryResult.meta)
       if (summary.responseId) responseIds.push(summary.responseId)
       lastFinish = summary.finishReason
       // Emitted like any other turn: `run.finished.text` can come from this
