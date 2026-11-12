@@ -162,14 +162,17 @@ export function refuseRawCredentialsInVm(
  * clear that are NOT model keys. A gateway cannot inject these, so they are
  * "exposed" — the run's `secrets` (they become the agent's env), and any
  * connector credential the harness would carry itself (a bearer `auth.token`,
- * or `headers` / `env` values a caller's connector shape adds).
+ * an `auth.headers` function, or `headers` / `env` values a caller's
+ * connector shape adds).
  *
  * Under `vm` they are refused unless the spec says
  * `exposedCredentials: "allowed"`, which only the caller's policy may set
  * (the owner has not decided when exposed credentials are acceptable in a
  * microVM, so the default is refuse). A connector whose token IS the
  * gateway's run token is not exposed: that is a connector routed through the
- * gateway, which injects the real credential host-side. The reason names
+ * gateway, which injects the real credential host-side. An `auth.headers`
+ * function is always exposed: what it returns cannot be checked before the
+ * run, and it runs in the same process as the harness. The reason names
  * secrets and connectors, never values.
  */
 export function refuseExposedCredentialsInVm(
@@ -188,6 +191,7 @@ export function refuseExposedCredentialsInVm(
       if (typeof token === "string" && token !== "" && token !== runToken) {
         found.push(`connector ${connector.name} auth.token`)
       }
+      if (connector.auth?.headers) found.push(`connector ${connector.name} auth.headers`)
       // Not part of ConnectorConfig, but a caller's connector may carry them,
       // and whatever is there reaches the harness.
       const extra = connector as unknown as { headers?: unknown; env?: unknown }

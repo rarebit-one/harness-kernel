@@ -21,8 +21,17 @@ export interface ConnectorConfig {
   /** For the stdio transport. */
   command?: string
   args?: string[]
-  /** Token is already resolved by the caller; the kernel treats it as opaque. */
-  auth?: { type: "bearer" | "none"; token?: string }
+  /**
+   * Token is already resolved by the caller; the kernel treats it as opaque.
+   * For a credential that rotates, set `headers` instead of `token`: the
+   * kernel asks it for every request (HTTP-family transports only).
+   */
+  auth?: { type: "bearer" | "none"; token?: string; headers?: ConnectorAuthHeaders }
+  /**
+   * The client identity announced to the server. Absent means the kernel's
+   * default name suffixed with the connector's own name, at version `0.1.0`.
+   */
+  clientInfo?: { name: string; version?: string }
   /**
    * The server's own tool names (not namespaced) this run may see and call.
    * Absent means every tool the server lists; `[]` means none. A credential
@@ -32,6 +41,32 @@ export interface ConnectorConfig {
    */
   tools?: string[]
 }
+
+/** What the kernel tells a {@link ConnectorAuthHeaders} function when it asks. */
+export interface ConnectorAuthRequest {
+  /** The connector's `name`. */
+  connector: string
+  /**
+   * True when the server just answered 401 to headers this function gave: the
+   * kernel asks once more and retries the request once, so return a fresh
+   * credential rather than a cached one.
+   */
+  refresh: boolean
+  /** Aborts when the connection is closed. */
+  signal?: AbortSignal
+}
+
+/**
+ * Returns the headers that authenticate one request to an MCP server, e.g.
+ * `{ Authorization: "Bearer …" }`. Called before every request the transport
+ * makes, so cache inside it if minting is expensive. Every value is masked in
+ * what the run's tools hand back to the model, so return only credential
+ * headers. A throw fails that request with a message naming the connector,
+ * not the error.
+ */
+export type ConnectorAuthHeaders = (
+  request: ConnectorAuthRequest,
+) => Record<string, string> | Promise<Record<string, string>>
 
 /**
  * What a run is allowed to touch. `tools` acts as an allowlist of tool names,
