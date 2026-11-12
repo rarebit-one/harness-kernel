@@ -103,6 +103,16 @@ function innerReport(meta: Record<string, unknown> | undefined): RetryReport | u
     : undefined
 }
 
+/**
+ * Internal: the id of the model that served a call, when a `withRetry` wrapper
+ * reported one on its result. The native loop reads it so a run's `provider`
+ * names the fallback that answered rather than the primary. Not exported from
+ * `index.ts`.
+ */
+export function servedBy(meta: Record<string, unknown> | undefined): string | undefined {
+  return innerReport(meta)?.served
+}
+
 /** Exponential backoff: `baseMs × 2^(retry−1)`, capped at `maxMs`. */
 export interface BackoffOptions {
   /** The first wait. Default 500. */

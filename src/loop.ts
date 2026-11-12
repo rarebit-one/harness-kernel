@@ -197,7 +197,11 @@ export interface LoopResult {
   usage?: TokenUsage
   /** Present when a terminal tool ended the run. */
   terminal?: TerminalCall
-  /** The `ChatModel.id` that served the run: the adapter name for a wrapped `Provider`. */
+  /**
+   * The `ChatModel.id` that served the run: the adapter name for a wrapped
+   * `Provider`. Behind `withRetry` it is the chain entry that answered the
+   * last call (`meta.retry.served`), not the primary's id.
+   */
   provider?: string
   /** The model id the last response named, else the adapter's configured model. */
   model?: string

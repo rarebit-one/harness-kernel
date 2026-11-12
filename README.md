@@ -723,7 +723,8 @@ an id, which is what `position` is for). A chain entry that is itself a
 `withRetry` wrapper folds its own report in, so `served` names the model inside
 it that answered. The chat result's own `model`, `responseId` and `upstream`
 come from the model that answered, so `model.turn` events audit a fallback the
-same way they audit any turn. When the chain runs out, `RetryExhaustedError`
+same way they audit any turn, and a run's `provider` names the chain entry that
+answered its last call rather than the primary. When the chain runs out, `RetryExhaustedError`
 carries every failure, the last as its `cause`, and `waitedMs`; an outer wrapper
 counts a nested one that ran out call by call. An abort stops a wait at once
 and is rethrown as the signal's reason, so the loop still ends `canceled` or
