@@ -1,6 +1,6 @@
 {
   "name": "@rarebit-one/harness-kernel",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "description": "Provider-neutral AI-harness kernel — LLM adapters, tool-use loop, MCP connectors, and a pluggable agent-engine seam",
   "license": "MIT",
   "author": "Rarebit One <code@jaryl.dev>",
