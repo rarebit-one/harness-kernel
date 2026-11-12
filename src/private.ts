@@ -115,6 +115,7 @@ export function privateRunChannels(
           type: event.type,
           maxSteps: event.maxSteps,
           maxDurationMs: event.maxDurationMs,
+          ...(event.maxCostUsd !== undefined ? { maxCostUsd: event.maxCostUsd } : {}),
           tools: [...event.tools],
           ...(event.toolSchemaBytes !== undefined
             ? { toolSchemaBytes: event.toolSchemaBytes }
@@ -220,11 +221,12 @@ const FINISH_REASONS = ["stop", "tool_calls", "length", "content_filter", "unkno
 function isFinishReason(value: unknown): value is FinishReason {
   return typeof value === "string" && (FINISH_REASONS as readonly string[]).includes(value)
 }
-const BUDGET_KINDS = ["steps", "duration"] as const
+const BUDGET_KINDS = ["steps", "duration", "cost"] as const
 const OUTCOMES = [
   "completed",
   "steps_exhausted",
   "timed_out",
+  "cost_exhausted",
   "canceled",
   "failed",
   "suspended",
@@ -235,6 +237,7 @@ const STOP_REASONS = [
   "length",
   "steps_exhausted",
   "timed_out",
+  "cost_exhausted",
   "canceled",
   "failed",
   "suspended",
