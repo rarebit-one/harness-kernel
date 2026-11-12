@@ -111,7 +111,16 @@ export interface InvokeContext {
   /** Ties this call to a wider trace. Middleware propagates it. */
   correlationId?: string
   /** Wall-clock budget for this single call. */
-  budget?: { maxDurationMs?: number }
+  budget?: {
+    maxDurationMs?: number
+    /**
+     * The absolute deadline (epoch ms) of the run this call belongs to, when
+     * there is one. `maxDurationMs` is a duration and cannot say how much of
+     * it a long run has already spent; this can, so a wrapper deciding whether
+     * a wait still fits reads it. The native loop sets it.
+     */
+    deadlineAt?: number
+  }
 }
 
 export type HealthStatus = "up" | "down" | "degraded" | "unknown"
