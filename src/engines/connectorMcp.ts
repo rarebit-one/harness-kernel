@@ -30,6 +30,14 @@ function bearerHeaders(config: ConnectorConfig): Record<string, string> | undefi
  */
 export function connectorToMcpServer(config: ConnectorConfig): SerializableMcpServer | null {
   if (config.kind !== "mcp") return null
+  // A file or config read once cannot call back for a fresh credential, and
+  // writing the server without one would connect it unauthenticated. The
+  // engines refuse such a run in `supports()`; this backs that up.
+  if (config.auth?.headers) {
+    throw new Error(
+      `connector ${config.name}: an auth.headers function cannot be written into a server config`,
+    )
+  }
 
   switch (config.transport) {
     case "stdio": {
@@ -78,6 +86,27 @@ export function refuseConnectorToolFilter(
     reason:
       `${engine} engine cannot limit a connector to some of its tools ` +
       `(${narrowed.map((c) => c.name).join(", ")} set tools); use the native engine or drop the list`,
+  }
+}
+
+/**
+ * The `supports()` refusal an out-of-process engine gives a run whose
+ * connectors authenticate through an `auth.headers` function, or `undefined`
+ * when none do. A harness in another process reads its server config once and
+ * cannot call back for a fresh credential, so carrying one snapshot would
+ * quietly break the rotation the caller asked for.
+ */
+export function refuseConnectorAuthHeaders(
+  engine: string,
+  spec: { connectors?: ConnectorConfig[] },
+): { ok: false; reason: string } | undefined {
+  const dynamic = (spec.connectors ?? []).filter((c) => c.kind === "mcp" && c.auth?.headers)
+  if (dynamic.length === 0) return undefined
+  return {
+    ok: false,
+    reason:
+      `${engine} engine cannot ask a connector for fresh auth headers ` +
+      `(${dynamic.map((c) => c.name).join(", ")} set auth.headers); use the native engine or resolve auth.token`,
   }
 }
 

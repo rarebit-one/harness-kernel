@@ -627,3 +627,60 @@ describe("review regressions: vm credential refusals", () => {
     )
   })
 })
+
+describe("connector auth.headers under vm", () => {
+  const rotating = {
+    name: "rot",
+    kind: "mcp" as const,
+    transport: "streamable_http" as const,
+    endpoint: "https://gw.example.com/c/rot",
+    // Even a function that hands back the run token cannot be checked before
+    // the run, so it counts as exposed.
+    auth: {
+      type: "bearer" as const,
+      headers: () => ({ Authorization: `Bearer ${GATEWAY.runToken}` }),
+    },
+  }
+
+  it("is an exposed credential, named but never called", async () => {
+    await withEnv({ ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", OPENROUTER_API_KEY: "" }, () => {
+      let called = false
+      const refused = new NativeEngine().supports(
+        spec("/tmp", {
+          isolation: "vm",
+          gateway: GATEWAY,
+          provider: { preferred: "mock" },
+          connectors: [
+            {
+              ...rotating,
+              auth: {
+                type: "bearer",
+                headers: () => {
+                  called = true
+                  return {}
+                },
+              },
+            },
+          ],
+        }),
+      )
+      expect(refused.ok).toBe(false)
+      expect(!refused.ok && refused.reason).toContain("connector rot auth.headers")
+      expect(called).toBe(false)
+    })
+  })
+
+  it("is let through by the explicit policy allowance, and untouched below vm", async () => {
+    await withEnv({ ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", OPENROUTER_API_KEY: "" }, () => {
+      const base = { gateway: GATEWAY, provider: { preferred: "mock" }, connectors: [rotating] }
+      expect(
+        new NativeEngine().supports(
+          spec("/tmp", { ...base, isolation: "vm", exposedCredentials: "allowed" }),
+        ),
+      ).toEqual({ ok: true })
+      expect(
+        new NativeEngine().supports(spec("/tmp", { ...base, isolation: "container" })),
+      ).toEqual({ ok: true })
+    })
+  })
+})
