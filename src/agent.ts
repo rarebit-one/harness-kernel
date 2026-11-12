@@ -30,6 +30,7 @@ import type {
 } from "./providers/types.js"
 import { executeTool, type Tool } from "./tools/registry.js"
 import { toToolSpecs, toolDispatch, type ToolMetadata } from "./tools/metadata.js"
+import { assertToolConcurrency, runInSegments, type ToolConcurrency } from "./tools/concurrency.js"
 
 /** What {@link runAgent} and {@link runConversation} share. */
 export interface LoopRunOptions {
@@ -78,6 +79,11 @@ export interface LoopRunOptions {
   signal?: AbortSignal
   /** The run's id, handed to tools on `ToolContext.runId`. */
   runId?: string
+  /**
+   * Run a step's concurrency-safe tool calls in parallel. Off by default:
+   * every call runs in series, in the model's order. See `ToolConcurrency`.
+   */
+  toolConcurrency?: ToolConcurrency
   log?: (line: string) => void
   /**
    * Structured event sink. Absent (the default) means the loop behaves exactly
@@ -586,6 +592,7 @@ export async function runConversation(
       tools: options.tools,
       limits: resolveLoopLimits(options),
       ...(options.providerOptions ? { providerOptions: options.providerOptions } : {}),
+      ...(options.toolConcurrency ? { toolConcurrency: options.toolConcurrency } : {}),
     },
     {
       log,
@@ -633,6 +640,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   // Checked before the first model call: a bad seed is a configuration error,
   // and the cheapest failure is the one that spends no tokens.
   assertSeed(req.messages)
+  assertToolConcurrency(req.toolConcurrency)
 
   // One signal for the whole run: the caller's cancel merged with the run's own
   // deadline. It reaches every model call (through `InvokeContext.signal`, down
@@ -651,6 +659,16 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
 
   const byName = new Map(tools.map((t) => [t.spec.name, t]))
   const specs = toToolSpecs(tools)
+  // The run's opt-in, applied per call. A call to a tool this run lacks is
+  // never safe: it runs alone, and is refused there as unknown.
+  const concurrency = req.toolConcurrency
+  const segments = concurrency && {
+    maxConcurrent: concurrency.maxConcurrent,
+    safe: (call: ToolCall) => {
+      const tool = byName.get(call.name)
+      return tool !== undefined && concurrency.concurrencySafe(tool)
+    },
+  }
   /** Close a parked call this run will not hand to the caller after all. */
   const closePending = (call: ToolCall, why: string) => {
     // Closed here, so no longer parked: the mark comes off the transcript's
@@ -879,22 +897,22 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
         break
       }
 
-      const results: ToolResult[] = []
-      for (const call of calls) {
+      // Everything one call goes through, from the stop check to its closing
+      // event, in one place: the serial and the parallel path both run each
+      // call through here, so no check can apply to one and not the other.
+      // No result means the call was parked; a terminal call that succeeded
+      // also hands back its answer.
+      const dispatchCall = async (
+        call: ToolCall,
+      ): Promise<{ result?: ToolResult; terminal?: TerminalCall }> => {
         // Never START a tool once the run is stopping: a side effect begun
         // after a cancel is the one thing a cancel must prevent. The call is
         // answered as not run rather than skipped, so the turn still closes.
-        if (signal.aborted) {
-          results.push(notRun(call.id))
-          continue
-        }
+        // Checked when the call starts, so a call queued behind a parallel
+        // batch is caught too.
+        if (signal.aborted) return { result: notRun(call.id) }
         const tool = byName.get(call.name)
         if (!tool) {
-          results.push({
-            toolCallId: call.id,
-            content: `unknown tool: ${call.name}`,
-            isError: true,
-          })
           log(`tool ${call.name} (unknown)`)
           events.emit({
             type: "tool.failed",
@@ -904,7 +922,9 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
             reason: "unknown_tool",
             error: `unknown tool: ${call.name}`,
           })
-          continue
+          return {
+            result: { toolCallId: call.id, content: `unknown tool: ${call.name}`, isError: true },
+          }
         }
         // A call the output cap cut off is never run and never an answer. A
         // terminal call on a `length` turn is refused even when its arguments
@@ -925,7 +945,6 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
                 "the call was not run. Call again, more briefly."
               : undefined
         if (refusal !== undefined) {
-          results.push({ toolCallId: call.id, content: refusal, isError: true })
           log(`tool ${call.name} refused: truncated`)
           events.emit({
             type: "tool.failed",
@@ -935,7 +954,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
             reason: "truncated",
             error: refusal,
           })
-          continue
+          return { result: { toolCallId: call.id, content: refusal, isError: true } }
         }
         // An external tool is the caller's to run. The call is parked, not
         // executed, and the run ends `suspended` once this step's server-side
@@ -955,7 +974,7 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
             name: call.name,
             input: detach(call.input),
           })
-          continue
+          return {}
         }
         // Emitted BEFORE execution: a process that dies mid-tool still leaves
         // evidence that the effect may have started, which is the one case a
@@ -978,11 +997,11 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
             callId: call.id,
             ...(loopCtx.runId !== undefined ? { runId: loopCtx.runId } : {}),
           })
-          results.push({
+          const result: ToolResult = {
             toolCallId: call.id,
             content: truncate(output.content),
             ...(output.structured !== undefined ? { structured: output.structured } : {}),
-          })
+          }
           log(`tool ${call.name} ok (${output.content.length} bytes)`)
           // Reversibility is copied from the tool's own metadata at call time —
           // the tool set can differ per run, so a consumer reading the stream
@@ -999,12 +1018,15 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
           // ran like any other (a throw above is an ordinary tool error the
           // model gets to correct), and the rest of this turn's calls still
           // get their results so the transcript stays whole.
-          if (!terminal && toolDispatch(tool) === "terminal") {
-            terminal = { callId: call.id, name: call.name, input: call.input, output }
+          if (toolDispatch(tool) === "terminal") {
+            return {
+              result,
+              terminal: { callId: call.id, name: call.name, input: call.input, output },
+            }
           }
+          return { result }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
-          results.push({ toolCallId: call.id, content: message, isError: true })
           log(`tool ${call.name} error: ${message}`)
           // Recorded even when the run is stopping: `tool.called` is already in
           // the stream, and a call with no closing event looks like a crash.
@@ -1018,7 +1040,17 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
             reason: isAbortError(err, signal) ? "aborted" : "threw",
             error: message,
           })
+          return { result: { toolCallId: call.id, content: message, isError: true } }
         }
+      }
+
+      // In series unless the run opted in; either way the results come back
+      // in the model's order, and so does the choice of answer: the first
+      // terminal call the model issued that succeeded, not the first to finish.
+      const results: ToolResult[] = []
+      for (const outcome of await runInSegments(calls, dispatchCall, segments)) {
+        if (outcome.result) results.push(outcome.result)
+        if (!terminal && outcome.terminal) terminal = outcome.terminal
       }
       if (pending.length > 0) {
         // A parked call outlives this run only when the run is actually
