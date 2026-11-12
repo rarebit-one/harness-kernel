@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { spawn } from "node:child_process"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -35,6 +36,7 @@ import {
 } from "./engines/claudeCode.js"
 import { CodexEngine, type CodexMessage, type CodexOptions } from "./engines/codex.js"
 import { defaultCodexDriver } from "./engines/codexDriver.js"
+import { KILL_SETTLE_MS, terminateProcessGroup } from "./processGroup.js"
 import { AcpEngine, EVE_AGENT, acpRunOutcome, type AcpOptions } from "./engines/acp.js"
 import type { RunSpec } from "./engines/types.js"
 import { defaultAcpDriver, promptOutcome } from "./engines/acpDriver.js"
@@ -290,6 +292,38 @@ describe("cancellation — the native loop", () => {
     expect(finished(events)).toMatchObject({ outcome: "failed" })
   })
 })
+
+/**
+ * True when no process is left in group `pgid`, checked once, with no wait. A
+ * zombie counts as gone (it executes nothing): where nothing reaps orphans,
+ * such as a container whose PID 1 is not an init, a dead grandchild stays a
+ * zombie for good. Zombies are only told apart where `/proc` exists (Linux).
+ */
+function groupGone(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0)
+  } catch {
+    return true
+  }
+  let entries: string[]
+  try {
+    entries = readdirSync("/proc").filter((e) => /^\d+$/.test(e))
+  } catch {
+    return false
+  }
+  for (const entry of entries) {
+    let stat: string
+    try {
+      stat = readFileSync(`/proc/${entry}/stat`, "utf8")
+    } catch {
+      continue // exited since the listing
+    }
+    // Fields after "(comm) ": state, ppid, pgrp, …
+    const [state, , pgrp] = stat.slice(stat.lastIndexOf(")") + 2).split(" ")
+    if (Number(pgrp) === pgid && state !== "Z") return false
+  }
+  return true
+}
 
 /** True once `pid` no longer exists, or exists only as a zombie awaiting reaping. */
 async function processGone(pid: number, attempts = 100): Promise<boolean> {
@@ -909,6 +943,40 @@ describe("review round 3", () => {
     expect(closed).toBe(1)
   }, 4_000)
 
+  it("terminateProcessGroup resolves only once the SIGKILLed group is empty", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "harness-group-stop-"))
+    try {
+      const pidFile = path.join(dir, "child.pid")
+      // No pipes: nothing the caller could wait on (a stdio "close") tells it
+      // when the grandchild has died, so only terminateProcessGroup can.
+      const child = spawn(
+        "sh",
+        ["-c", `trap '' TERM; sleep 30 & echo $! > ${JSON.stringify(pidFile)}; wait`],
+        { detached: true, stdio: "ignore" },
+      )
+      const pgid = child.pid as number
+      for (
+        let i = 0;
+        i < 250 && !(existsSync(pidFile) && readFileSync(pidFile, "utf8").trim());
+        i += 1
+      ) {
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      const pid = Number(readFileSync(pidFile, "utf8").trim())
+      expect(groupGone(pgid)).toBe(false)
+
+      const started = Date.now()
+      await terminateProcessGroup(child, 50)
+      // The two known members first (one read each), then the whole group.
+      expect(await processGone(pgid, 1)).toBe(true)
+      expect(await processGone(pid, 1)).toBe(true)
+      expect(groupGone(pgid)).toBe(true)
+      expect(Date.now() - started).toBeLessThan(50 + KILL_SETTLE_MS + 1_000)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 8_000)
+
   it("the codex driver force-kills a codex process group that ignores SIGTERM", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "harness-codex-stop-"))
     const savedPath = process.env.PATH
@@ -917,7 +985,7 @@ describe("review round 3", () => {
       // A stand-in `codex` that ignores SIGTERM and leaves a grandchild behind.
       writeFileSync(
         path.join(dir, "codex"),
-        `#!/bin/sh\ntrap '' TERM\nsleep 30 &\necho $! > "$PIDFILE"\nwait\n`,
+        `#!/bin/sh\ntrap '' TERM\nsleep 30 &\necho "$$ $!" > "$PIDFILE"\nwait\n`,
         { mode: 0o755 },
       )
       process.env.PATH = `${dir}:${savedPath ?? ""}`
@@ -942,8 +1010,9 @@ describe("review round 3", () => {
         clearInterval(poll)
       }
       expect(messages.at(-1)).toMatchObject({ kind: "result", stoppedBy: "signal" })
-      const pid = Number(readFileSync(pidFile, "utf8").trim())
+      const [pgid = NaN, pid = NaN] = readFileSync(pidFile, "utf8").trim().split(" ").map(Number)
       // Gone by the time the driver returns — not merely signalled.
+      expect(groupGone(pgid)).toBe(true)
       expect(await processGone(pid, 1)).toBe(true)
     } finally {
       process.env.PATH = savedPath

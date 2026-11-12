@@ -60,7 +60,8 @@ export interface CodexOptions {
   /**
    * After a stop, how long codex's process group gets to exit on SIGTERM
    * before it is SIGKILLed. Defaults to 5s. The driver does not return until
-   * the group is gone, so a stopped run cannot keep mutating the workspace.
+   * the group is gone (it waits up to a further second after SIGKILL for the
+   * last process to die), so a stopped run cannot keep mutating the workspace.
    */
   cancelGraceMs?: number
 }
