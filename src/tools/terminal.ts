@@ -17,12 +17,14 @@ export interface TerminalToolOptions {
  *
  * This is how a conversational application gets a typed reply out of the loop
  * instead of parsing prose. The model is told the schema through the tool
- * definition, so the shape is enforced where models enforce shapes best. The
- * kernel does not validate the arguments against the schema (it ships no
- * JSON-Schema validator); a caller that needs validation runs it on
- * `terminal.input`, or supplies its own `Tool` with `meta.dispatch: "terminal"`
- * whose executor throws on a bad answer, which sends the error back to the
- * model and lets it try again.
+ * definition, so the shape is enforced where models enforce shapes best. By
+ * default the kernel does not check the arguments against the schema; a run
+ * with `validateToolInput: true` does, and refuses a call that does not fit
+ * before it can end the run, telling the model what to fix. A rule the schema
+ * cannot express (one field required only when another has a given value) is
+ * the caller's: supply your own `Tool` with `meta.dispatch: "terminal"` whose
+ * executor throws on a bad answer, which sends the error back to the model and
+ * lets it try again.
  *
  * The executor here is a no-op that acknowledges the call: a tool result still
  * has to be appended so the transcript carries no dangling tool call and can be
