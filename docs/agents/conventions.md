@@ -80,7 +80,9 @@ Moved verbatim from the former `CLAUDE.md`; `AGENTS.md` keeps a one-line summary
   other `ToolMetadata` field is descriptive and left to the application; where
   a call ends up (`execute` / `terminal` / `external`) is control flow, and
   control flow is the loop's. A second field the loop reads is the tell that
-  policy is leaking in.
+  policy is leaking in. `concurrencySafe` shows the pattern: a tool declares
+  it, but the loop runs calls in parallel only through a predicate the run
+  passes in (`toolConcurrency`), so acting on the claim stays the caller's.
 - **One automated quality loop.** The loop's only retries are infrastructure:
   it never re-asks the model for a better answer, never resets context, never
   scores output. Those are an application's experiments to run and own; a
