@@ -66,6 +66,18 @@ export interface LoopRequest {
 export interface LoopLimits {
   maxSteps: number
   maxDurationMs: number
+  /**
+   * The most the run may spend, in US dollars, as the model calls report it
+   * (`TokenUsage.reportedCost`). Absent means unlimited, and there is no
+   * default. Checked after each model turn against the run's summed reported
+   * cost: once it is reached, a turn that asked for tools ends the run with
+   * `cost_exhausted` instead of running them, and no summary call is made. A
+   * turn that reports no cost adds nothing (unknown is not free, but nor is it
+   * a number to compare); price unreported calls in a model middleware if the
+   * limit must cover them. Only the run's own model turns count: what a tool
+   * spends (a `modelAsTool` sub-model, a paid API) is outside it.
+   */
+  maxCostUsd?: number
   budgetVisible?: boolean
 }
 
@@ -252,6 +264,7 @@ export async function runWithEvents(
     type: "run.started",
     maxSteps: req.limits.maxSteps,
     maxDurationMs: req.limits.maxDurationMs,
+    ...(req.limits.maxCostUsd !== undefined ? { maxCostUsd: req.limits.maxCostUsd } : {}),
     tools: req.tools.map((t) => t.spec.name),
     toolSchemaBytes: Buffer.byteLength(JSON.stringify(req.tools.map((t) => t.spec)), "utf8"),
   })
