@@ -89,10 +89,10 @@ const LOG_TRUNCATE = 2000
  * mirroring the Claude Code engine. Because codex runs as an EXTERNAL process, it
  * reaches the run's tools through a `config.toml` the engine writes into a transient
  * `CODEX_HOME` (codex's REAL MCP discovery mechanism — it ignores `.mcp.json`):
- * the run's connectors (Pillar 4) plus the runner-hosted, workspace-scoped
- * capability server (Pillar 3) as a stdio MCP server. The capability server
- * persists issue/knowledge emits to a file outside the tree, which this engine
- * reads back — so codex reaches emit parity with native and Claude Code.
+ * the run's connectors plus the runner-hosted, workspace-scoped capability
+ * server as a stdio MCP server. The capability server persists the run's
+ * emissions to a file outside the tree, which this engine reads back — so codex
+ * reaches emit parity with native and Claude Code.
  *
  * Codex runs arbitrary code, so — like Claude Code — `supports()` refuses unless
  * the operator enabled it (RUNNER_ENABLE_CODEX=1) AND the run is on the ephemeral

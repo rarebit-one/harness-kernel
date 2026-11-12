@@ -33,9 +33,10 @@ export async function* defaultClaudeCodeDriver(
   else stop.signal?.addEventListener("abort", onStop, { once: true })
 
   // Mount the run's MCP servers: the runner-hosted, workspace-scoped capability
-  // surface (in-process) so Claude Code emits issues/knowledge/files uniformly with
-  // native, plus the run's external connectors (Slack, an Airwallex MCP, …) so they
-  // become tools inside Claude Code too. Same connector source the native engine uses.
+  // surface (in-process) so Claude Code reaches the same application-supplied
+  // capabilities as native, plus the run's external connectors (any configured
+  // remote MCP server) so they become tools inside Claude Code too. Same connector
+  // source the native engine uses.
   const capabilities = opts.mcpTools ?? []
   const connectors = connectorServers(opts.connectors ?? [])
   const mcpServers: Record<string, McpServerConfig> = { ...connectors }
