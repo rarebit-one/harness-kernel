@@ -58,7 +58,7 @@ export function codexEnv(
  *                               formatted stdout transcript)
  *   - `--dangerously-bypass-approvals-and-sandbox`
  *                             — auto-approve every action (incl. MCP tool calls such
- *                               as the runner-hosted open_issue) and disable codex's
+ *                               as the runner-hosted capabilities) and disable codex's
  *                               local sandbox. Under the default `approval: never` +
  *                               `sandbox: read-only`, codex auto-CANCELS tool calls
  *                               it would otherwise need approval for, so the

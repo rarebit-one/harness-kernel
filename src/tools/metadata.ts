@@ -12,7 +12,7 @@ import type { Tool } from "./registry.js"
  *
  * The metadata here is only ever *descriptive*. The kernel records that a tool
  * says `requiresConfirmation`; it never implements a confirmation flow, because
- * what confirmation means — a modal, a Slack approval, a second agent — is the
+ * what confirmation means — a modal, a chat approval, a second agent — is the
  * application's decision. Same for undo and retention. Policy lives in the app
  * layer; the vocabulary lives here so every layer agrees on the words.
  */

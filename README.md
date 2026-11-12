@@ -540,11 +540,15 @@ would defeat the point.
 ### Engines
 
 An engine is a pluggable agent harness. `native` is the in-process tool-use loop
-above; `claude-code` and `codex` shell out to those CLIs/SDKs. All three share
-one capability surface (`open_issue`, `write_file`, `promote_knowledge`) scoped
-to a single run's workspace, and all three mutate files **out of band** — the
-caller diffs the working tree afterwards, so the engine contract never has to
-model "an edit" uniformly.
+above; `claude-code` and `codex` shell out to those CLIs/SDKs. The kernel ships
+one capability, `write_file` (`writeFileCapability`), scoped to a single run's
+workspace, and `claude-code` mounts it by default. Every other capability is the
+application's, injected per engine: `domainTools` for `native`,
+`capabilityTools` for `claude-code`, a spawnable `capabilityServerScript` for
+`codex` (see
+[The kernel defines no domain tools](#the-kernel-defines-no-domain-tools)). All
+three mutate files **out of band** — the caller diffs the working tree
+afterwards, so the engine contract never has to model "an edit" uniformly.
 
 ```ts
 import { selectEngine } from "@rarebit-one/harness-kernel"
