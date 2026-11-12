@@ -270,13 +270,16 @@ export interface ToolSucceededEvent extends RunEventBase {
  *  parse); nothing ran, and the model was told to answer again. `rejected` is
  *  a parked external call the caller declined by policy (a gate, a permission)
  *  rather than executed: the result it supplied on resume said so
- *  (`ToolResult.rejected`), and nothing ran. */
+ *  (`ToolResult.rejected`), and nothing ran. `invalid_input` is a call whose
+ *  arguments failed the tool's `inputSchema` on a run that asked for
+ *  validation (`validateToolInput`); nothing ran, and the model was told
+ *  which arguments to fix. */
 export interface ToolFailedEvent extends RunEventBase {
   type: "tool.failed"
   step: number
   callId: string
   name: string
-  reason: "threw" | "unknown_tool" | "aborted" | "truncated" | "rejected"
+  reason: "threw" | "unknown_tool" | "aborted" | "truncated" | "rejected" | "invalid_input"
   error: string
 }
 
