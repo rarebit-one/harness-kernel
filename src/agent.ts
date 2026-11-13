@@ -14,6 +14,7 @@ import {
   type LoopLimits,
   type LoopRequest,
   type LoopResult,
+  type PrepareMessages,
   type TerminalCall,
 } from "./loop.js"
 import { asChatModel, chatRequest, type ChatModel } from "./models/chat.js"
@@ -82,6 +83,16 @@ export interface LoopRunOptions {
    * see `validateToolInput` for the subset of JSON Schema it checks.
    */
   validateToolInput?: boolean
+  /**
+   * A per-request context policy: shapes what each model call is sent without
+   * touching the transcript the run keeps and returns. Absent sends the
+   * transcript as it stands. Must be pure and return a well-formed request
+   * (every tool call answered, no orphan results), or the run fails; and a
+   * policy that rewrites early messages defeats prompt caching. See
+   * {@link PrepareMessages}. `RunSpec` does not carry it, since a function is
+   * not data; a `NativeEngine` caller supplies it through its `loop` option.
+   */
+  prepareMessages?: PrepareMessages
   /**
    * Cancels the run. On abort the in-flight model request and tool are
    * stopped, no summary call is made, and the run resolves (never rejects)
@@ -423,6 +434,51 @@ function assertSeed(messages: AgentMessage[]): void {
 }
 
 /**
+ * What a `prepareMessages` policy returned, if a provider would accept it:
+ * not empty, and every assistant turn's tool calls (each id once) answered,
+ * each exactly once, by the tool turn straight after it, with no tool turn or
+ * result that answers nothing. A policy that cut a result and kept its call (or the
+ * reverse) is a bug in the caller's policy; sending it would fail at the
+ * provider with a less useful error, or not at all on a lenient one, so the
+ * run fails here instead.
+ */
+function assertPrepared(messages: AgentMessage[]): AgentMessage[] {
+  const fail = (why: string): never => {
+    throw new Error(`prepareMessages returned a malformed request: ${why}`)
+  }
+  if (!Array.isArray(messages) || messages.length === 0) fail("no messages")
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i]
+    const prev = messages[i - 1]
+    if (message?.role === "tool") {
+      if (prev?.role !== "assistant" || prev.toolCalls.length === 0) {
+        fail(`message ${i} is a tool turn that answers no tool call`)
+      }
+      continue
+    }
+    if (message?.role !== "assistant" || message.toolCalls.length === 0) continue
+    const asked = message.toolCalls.map((c) => c.id)
+    const twice = asked.filter((id, at) => asked.indexOf(id) !== at)
+    if (twice.length > 0) {
+      fail(`message ${i} makes more than one tool call with the same id: ${twice.join(", ")}`)
+    }
+    const next = messages[i + 1]
+    const given = next?.role === "tool" ? next.results.map((r) => r.toolCallId) : []
+    const missing = asked.filter((id) => !given.includes(id))
+    if (missing.length > 0) {
+      fail(`message ${i} has tool calls with no result: ${missing.join(", ")}`)
+    }
+    const stray = given.filter((id, at) => !asked.includes(id) || given.indexOf(id) !== at)
+    if (stray.length > 0) {
+      fail(
+        `message ${i + 1} has results that answer no call, or answer one twice: ${stray.join(", ")}`,
+      )
+    }
+  }
+  return messages
+}
+
+/**
  * The external calls a resumed seed answers: the tool turn at its tail, matched
  * against the assistant turn before it, for the calls the loop parked. A parked
  * call carries `external: true` in the transcript, so this does not depend on
@@ -609,6 +665,7 @@ export async function runConversation(
       ...(options.providerOptions ? { providerOptions: options.providerOptions } : {}),
       ...(options.toolConcurrency ? { toolConcurrency: options.toolConcurrency } : {}),
       ...(options.validateToolInput ? { validateToolInput: true } : {}),
+      ...(options.prepareMessages ? { prepareMessages: options.prepareMessages } : {}),
     },
     {
       log,
@@ -709,12 +766,18 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
   // The budget line is part of the REQUEST, never of `messages`: a stored
   // transcript must not fill up with the loop's own bookkeeping, and the
   // trailing position keeps the cached prefix (system, tools, history) intact.
-  const request = (toolSpecs: ToolSpec[], stepsLeft?: number) =>
-    chatRequest(
+  //
+  // A caller's `prepareMessages` shapes what is sent, here and only here; the
+  // transcript it is handed is a copy, and what it returns is checked before
+  // any provider sees it.
+  const prepare = req.prepareMessages
+  const request = (toolSpecs: ToolSpec[], stepsLeft?: number) => {
+    const sent = prepare ? assertPrepared(prepare([...messages])) : messages
+    return chatRequest(
       system,
       req.limits.budgetVisible && stepsLeft !== undefined
         ? [
-            ...messages,
+            ...sent,
             budgetLine(
               stepsLeft,
               maxSteps,
@@ -724,11 +787,12 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
                 : undefined,
             ),
           ]
-        : messages,
+        : sent,
       toolSpecs,
       undefined,
       providerOptions,
     )
+  }
   const provider = model.id
 
   let finalText = ""
@@ -1165,8 +1229,12 @@ export async function runNativeLoop(req: LoopRequest, loopCtx: LoopContext): Pro
     // A run stopped while the last tools ran gets no summary call: the caller
     // asked it to stop, or its time is already gone.
     if (signal.aborted) return stopped()
+    // Built outside the recovery below: a `prepareMessages` policy that throws
+    // or returns a malformed request is the caller's bug and fails the run, as
+    // it does on any other call, rather than passing for a failed summary.
+    const summaryRequest = request([])
     try {
-      const summaryResult = await model.invoke(request([]), ctx)
+      const summaryResult = await model.invoke(summaryRequest, ctx)
       const summary = summaryResult.value
       usage = addUsage(usage, summaryResult.usage)
       servedModel = summary.model

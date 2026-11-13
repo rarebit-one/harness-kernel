@@ -64,7 +64,32 @@ export interface LoopRequest {
    * runs. Off by default. See `LoopRunOptions.validateToolInput`.
    */
   validateToolInput?: boolean
+  /**
+   * Shapes what each model call is SENT; see `LoopRunOptions.prepareMessages`.
+   * Absent (the default) sends the transcript as it stands.
+   */
+  prepareMessages?: PrepareMessages
 }
+
+/**
+ * A caller's per-request context policy: given the transcript so far, return
+ * the messages one model call should be sent, for example older tool results
+ * squashed under a token ceiling. It must be pure. The native loop applies it
+ * in its request builder, the one place a request is assembled, before the
+ * budget line is appended; the transcript the run keeps and returns is never
+ * touched, so `LoopResult.messages` stays the unprepared history.
+ *
+ * The output must be a request a provider accepts: every tool call answered
+ * by the tool turn straight after it, and no tool result without its call (use
+ * `settleMessages` when cutting). The loop checks this on every call and fails
+ * the run with an error when it does not hold, rather than sending it.
+ *
+ * Rewriting early messages defeats prompt caching: a provider caches the
+ * request's prefix, so a policy that changes the head of the history on each
+ * step pays full price for the whole prompt every time. Prefer cutting or
+ * squashing at a stable boundary and leaving the head alone.
+ */
+export type PrepareMessages = (messages: readonly AgentMessage[]) => AgentMessage[]
 
 /**
  * A loop's resolved budgets. `maxSteps` and `maxDurationMs` are always numbers
