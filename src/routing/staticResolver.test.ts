@@ -44,18 +44,28 @@ describe("StaticRouteResolver", () => {
     expect(typeof result.value.text).toBe("string")
   })
 
-  it("fills defaults for the optional parts of a definition", async () => {
+  it("fills defaults for the optional parts of a definition, leaving tools unrestricted", async () => {
     const resolver = new StaticRouteResolver([
       { name: "bare", model: { kind: "vision.detect", id: "yolo" } },
     ])
 
-    await expect(resolver.resolve("bare")).resolves.toEqual({
+    const route = await resolver.resolve("bare")
+    expect(route).toEqual({
       capability: "bare",
       model: { kind: "vision.detect", id: "yolo" },
       prompt: "",
-      tools: [],
       limits: {},
     })
+    // Absent, not empty: no restriction.
+    expect(route.tools).toBeUndefined()
+  })
+
+  it("keeps an explicit empty tool list, which means no tools", async () => {
+    const resolver = new StaticRouteResolver([
+      { name: "toolless", model: { kind: "chat", id: "mock" }, tools: [] },
+    ])
+
+    await expect(resolver.resolve("toolless")).resolves.toMatchObject({ tools: [] })
   })
 
   it("carries application meta through resolution untouched", async () => {

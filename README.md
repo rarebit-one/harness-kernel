@@ -107,6 +107,9 @@ const route = await resolver.resolve("summarise")
 const model = registry.resolve(route.model) // the resolver picks, the registry binds
 ```
 
+`route.tools` is the definition's list as given: absent means unrestricted and
+`[]` means no tools, so check for `undefined` before treating it as an allowlist.
+
 **3. Middleware.** Payload-blind, so one implementation covers every kind:
 
 ```ts
