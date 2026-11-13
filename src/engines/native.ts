@@ -5,6 +5,7 @@ import { nativeLoop, runWithEvents, type Loop } from "../loop.js"
 import { asChatModel } from "../models/chat.js"
 import { providerAvailability, selectProvider } from "../providers/index.js"
 import { maskToolOutput, secretMaskSet, secretsToEnv } from "../secrets.js"
+import { scopeRunTools } from "./toolScoping.js"
 import { primitiveTools, connectorTools } from "../tools/registry.js"
 import { PrivateRunError, privateRunChannels } from "../private.js"
 import type { Tool } from "../tools/registry.js"
@@ -175,7 +176,12 @@ export class NativeEngine implements AgentEngine {
     try {
       // The run's secrets live in run_code's env, so mask their values in
       // everything a tool hands back to the model.
-      const tools = maskToolOutput([...primitives, ...connectors.tools], secrets.mask)
+      // Metadata scoping (`capability` / `mode`) narrows the assembled surface
+      // here, before the loop, so the model and `run.started.tools` agree.
+      const tools = maskToolOutput(
+        scopeRunTools([...primitives, ...connectors.tools], spec),
+        secrets.mask,
+      )
       ctx.log(`tools: ${tools.map((t) => t.spec.name).join(", ") || "(none)"}`)
 
       // Budgets are resolved before the call: a loop is handed numbers, not

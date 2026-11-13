@@ -130,10 +130,13 @@ failing the run.
 
 **6. Tools.** Rich metadata (capability scoping, invocation-mode gating,
 confirmation, reversibility, retention, client visibility) with lossy
-projections down to what a provider actually needs — and `modelAsTool()`, which
-surfaces any model invocation as a callable tool. That last one is the cleanest
-form of extension: a perception model becomes something the chat loop can call
-without the loop, the engines, or any kernel code learning perception exists.
+projections down to what a provider actually needs (`isToolVisible` is the
+scoping projection; `NativeEngine` applies it when a `RunSpec` sets
+`capability` or `mode`, and the out-of-process engines refuse those fields) —
+and `modelAsTool()`, which surfaces any model invocation as a callable tool.
+That last one is the cleanest form of extension: a perception model becomes
+something the chat loop can call without the loop, the engines, or any kernel
+code learning perception exists.
 
 **7. The loop.** The control flow itself. Everything above answers "which
 implementation?" for something the loop *uses*; this is the loop.

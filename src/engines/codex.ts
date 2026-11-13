@@ -14,6 +14,7 @@ import {
   writeCodexConfig,
   type SerializableMcpServer,
 } from "./connectorMcp.js"
+import { refuseToolScoping } from "./toolScoping.js"
 import { readEmissions } from "./capabilityEmissions.js"
 import { defaultCodexDriver } from "./codexDriver.js"
 import { harnessPrompt } from "./harnessPrompt.js"
@@ -134,6 +135,7 @@ export class CodexEngine implements AgentEngine {
       refuseBadGateway("codex", spec) ??
       refuseConnectorToolFilter("codex", spec) ??
       refuseConnectorAuthHeaders("codex", spec) ??
+      refuseToolScoping("codex", spec) ??
       refuseCredentialsInVm("codex", spec, ["OPENAI_API_KEY", "CODEX_API_KEY"]) ?? { ok: true }
     )
   }

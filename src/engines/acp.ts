@@ -14,6 +14,7 @@ import {
   refuseConnectorToolFilter,
   type SerializableMcpServer,
 } from "./connectorMcp.js"
+import { refuseToolScoping } from "./toolScoping.js"
 import { readEmissions } from "./capabilityEmissions.js"
 import { defaultAcpDriver } from "./acpDriver.js"
 import { harnessPrompt } from "./harnessPrompt.js"
@@ -210,6 +211,7 @@ export class AcpEngine implements AgentEngine {
       refuseBadGateway(this.name, spec) ??
       refuseConnectorToolFilter(this.name, spec) ??
       refuseConnectorAuthHeaders(this.name, spec) ??
+      refuseToolScoping(this.name, spec) ??
       refuseCredentialsInVm(this.name, spec, this.agent.hostKeyEnvs ?? []) ?? { ok: true }
     )
   }

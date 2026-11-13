@@ -4,6 +4,7 @@ import type { ProviderOptions } from "../providers/options.js"
 import type { LoopConsumed } from "../loop.js"
 import type { AgentMessage, FinishReason, ToolCall } from "../providers/types.js"
 import type { ConnectorConfig, Permissions, WorkflowDefinition } from "../types.js"
+import type { InvocationMode } from "../tools/metadata.js"
 import type { Isolation } from "./isolation.js"
 import type { EnvironmentFile, RunInstructions, RunSkill, RunSource } from "./environment.js"
 import type { RunGateway } from "./gateway.js"
@@ -136,6 +137,20 @@ export interface RunSpec {
    * never a workflow author. Ignored below `vm`.
    */
   exposedCredentials?: "allowed" | "refused"
+  /**
+   * The capability this run resolves for, matched against each tool's
+   * `ToolMetadata.targetCapabilities`. With `mode`, the native engine narrows
+   * the assembled tool surface (primitives, domain tools and connector tools)
+   * through `selectTools` before the loop starts, so the model's tools and
+   * `run.started.tools` both reflect it. Absent, with `mode` absent too, means
+   * unscoped: every tool is handed over, as before. Once either is set the
+   * projection fails closed, so a tool scoped to some capability is hidden from
+   * a run that names none. Out-of-process engines refuse a run that sets
+   * either, in `supports()`.
+   */
+  capability?: string
+  /** The run's invocation mode, matched against `ToolMetadata.invocationModes`; see `capability`. */
+  mode?: InvocationMode
 }
 
 export interface EngineContext {
