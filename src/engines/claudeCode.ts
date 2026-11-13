@@ -6,6 +6,7 @@ import type { ConnectorConfig } from "../types.js"
 import type { AgentEngine, EngineContext, EngineResult, EngineSupport, RunSpec } from "./types.js"
 import { defaultClaudeCodeDriver } from "./claudeCodeDriver.js"
 import { refuseConnectorAuthHeaders, refuseConnectorToolFilter } from "./connectorMcp.js"
+import { refuseToolScoping } from "./toolScoping.js"
 import { writeFileCapability, type CapabilityContext, type CapabilityTool } from "./capability.js"
 import { harnessPrompt } from "./harnessPrompt.js"
 import { environmentInstructions, hasEnvironment, writeSkills } from "./environment.js"
@@ -144,6 +145,7 @@ export class ClaudeCodeEngine implements AgentEngine {
       refuseBadGateway("claude-code", spec) ??
       refuseConnectorToolFilter("claude-code", spec) ??
       refuseConnectorAuthHeaders("claude-code", spec) ??
+      refuseToolScoping("claude-code", spec) ??
       refuseCredentialsInVm("claude-code", spec, ["ANTHROPIC_API_KEY"]) ?? { ok: true }
     )
   }

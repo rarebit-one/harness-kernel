@@ -127,11 +127,13 @@ export type BudgetKind = "steps" | "duration" | "cost"
 
 /** The loop is about to take its first turn. Carries the resolved budgets and
  *  the names of the tools the loop was handed, which is the surface the model
- *  sees. No engine applies metadata scoping (`targetCapabilities`,
- *  `invocationModes`) on the way in: a caller that wants it narrows first,
- *  with `tools.filter((t) => isToolVisible(t, selection))`. `NativeEngine`
- *  applies the `permissions.tools` allowlist to primitives and passes it to the
- *  domain-tool factory, which decides whether to honour it. */
+ *  sees. The loop itself applies no metadata scoping (`targetCapabilities`,
+ *  `invocationModes`). `NativeEngine` scopes the surface it assembles when the
+ *  spec sets `RunSpec.capability` or `RunSpec.mode` (absent both, nothing is
+ *  hidden), after applying the `permissions.tools` allowlist to primitives and
+ *  passing it to the domain-tool factory, which decides whether to honour it.
+ *  A caller driving the loop directly narrows first, with
+ *  `tools.filter((t) => isToolVisible(t, selection))`. */
 export interface RunStartedEvent extends RunEventBase {
   type: "run.started"
   maxSteps: number
