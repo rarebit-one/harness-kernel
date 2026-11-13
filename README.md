@@ -515,6 +515,44 @@ budget). It is never written into `messages`, and it rides after the
 history so the cached prefix (system, tools, earlier turns) is untouched. The
 limits stay hard either way; the line only lets the model pace itself.
 
+**Per-request context policy.** Trimming history between runs needs nothing
+from the kernel: slice the stored transcript before seeding, and
+`withUserTurn` keeps the cut valid. To shrink what one model call is *sent*
+within a run, pass `prepareMessages` (on `runConversation`, `runAgent` or a
+`LoopRequest`): a pure function from the transcript so far to the messages for
+that call. The loop applies it in its request builder before the budget line,
+on every call including the closing summary, and never to the transcript the
+run keeps, so `result.messages` is still the full history.
+
+```ts
+const result = await runConversation({
+  provider,
+  system,
+  messages,
+  tools,
+  // Squash every tool result but the newest; each call stays answered.
+  prepareMessages: (history) => {
+    const newest = history.map((m) => m.role).lastIndexOf("tool")
+    return history.map((m, i) =>
+      m.role === "tool" && i !== newest
+        ? { role: "tool", results: m.results.map((r) => ({ ...r, content: "[trimmed]" })) }
+        : m,
+    )
+  },
+})
+```
+
+What it returns must be a request a provider accepts: every tool call answered
+by the tool turn straight after it, and no result without its call. The loop
+checks that before each call and fails the run with `prepareMessages returned a
+malformed request: …` rather than sending it; cut with `settleMessages`. A
+policy that rewrites early messages defeats prompt caching, because the cached
+prefix changes on every step; cut or squash at a stable boundary and leave the
+head alone. The kernel neither decides nor measures what to drop. `RunSpec`
+does not carry the policy, since a function is not data: a `NativeEngine`
+caller sets it through the engine's `loop` option, as
+`{ name, run: (req, ctx) => nativeLoop.run({ ...req, prepareMessages }, ctx) }`.
+
 ### Parallel tool calls
 
 By default the loop runs a step's tool calls one at a time, in the order the

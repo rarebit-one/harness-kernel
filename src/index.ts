@@ -158,6 +158,7 @@ export type {
   LoopConsumed,
   LoopResult,
   TerminalCall,
+  PrepareMessages,
 } from "./loop.js"
 
 // The run event stream. The kernel emits it; storing, resuming or replaying it
