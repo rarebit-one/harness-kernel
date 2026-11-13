@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process"
 import { Readable, Writable } from "node:stream"
 import {
-  ClientSideConnection,
+  client,
+  MessageTooLargeError,
+  methods,
   ndJsonStream,
   PROTOCOL_VERSION,
-  type Client,
-} from "@zed-industries/agent-client-protocol"
+} from "@agentclientprotocol/sdk"
 import { runStop, type StoppedBy } from "../signals.js"
 import type { AcpClientEvents, AcpOptions, AcpOutcome } from "./acp.js"
 import { childEnv } from "./isolation.js"
@@ -33,14 +34,14 @@ export function acpEnv(
 /**
  * The default ACP driver: the single integration boundary to an ACP agent
  * subprocess, mirroring `defaultCodexDriver`'s injectable shape. It spawns the
- * agent, wires an {@link ClientSideConnection} over its stdio via
- * {@link ndJsonStream}, and runs one ACP turn: `initialize` → `session/new`
- * (with the run's cwd + MCP servers) → `session/prompt`.
+ * agent, connects an ACP {@link client} app to its stdio via {@link ndJsonStream},
+ * and runs one ACP turn: `initialize` → `session/new` (with the run's cwd + MCP
+ * servers) → `session/prompt`.
  *
- * The host `Client` it implements is deliberately minimal:
- *   - `sessionUpdate` accumulates `agent_message_chunk`s (the run's prose) and
+ * The client side it implements is deliberately minimal:
+ *   - `session/update` accumulates `agent_message_chunk`s (the run's prose) and
  *     surfaces thoughts / tool-call titles to the log.
- *   - `requestPermission` AUTO-APPROVES (selects an `allow_*` option). This is
+ *   - `session/request_permission` AUTO-APPROVES (selects an `allow_*` option). This is
  *     the ACP equivalent of the codex driver's `--dangerously-bypass-approvals`
  *     and the Claude Code driver's `bypassPermissions`, justified the same way:
  *     an ACP agent only runs inside a throwaway ephemeral container, so the
@@ -74,10 +75,8 @@ export async function defaultAcpDriver(
     stderr += `\n${String(err)}`
   })
 
-  const client: Client = {
-    // Not `async`: these return a resolved promise directly (the ACP `Client`
-    // methods are `Promise`-typed, but there is nothing to await).
-    sessionUpdate({ update }) {
+  const app = client()
+    .onNotification(methods.client.session.update, ({ params: { update } }) => {
       switch (update.sessionUpdate) {
         case "agent_message_chunk":
           if (update.content.type === "text") events.onAssistantChunk(update.content.text)
@@ -91,22 +90,22 @@ export async function defaultAcpDriver(
         default:
           break
       }
-      return Promise.resolve()
-    },
-    requestPermission({ options }) {
+    })
+    .onRequest(methods.client.session.requestPermission, ({ params: { options } }) => {
       const allow =
         options.find((o) => o.kind === "allow_always") ??
         options.find((o) => o.kind === "allow_once")
-      return Promise.resolve(
-        allow
-          ? { outcome: { outcome: "selected", optionId: allow.optionId } }
-          : { outcome: { outcome: "cancelled" } },
-      )
-    },
-  }
+      return allow
+        ? { outcome: { outcome: "selected", optionId: allow.optionId } }
+        : { outcome: { outcome: "cancelled" } }
+    })
 
+  // The stream keeps the SDK's default cap on one incoming message
+  // (`DEFAULT_MAX_MESSAGE_BYTES`): an agent that writes a larger line fails the
+  // run with a clear error instead of growing host memory without bound.
   const stream = ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout))
-  const conn = new ClientSideConnection(() => client, stream)
+  const conn = app.connect(stream)
+  const agent = conn.agent
 
   // The run's own timer merged with the caller's cancel. Once a session exists
   // the stop is a protocol-level `session/cancel` (the agent winds the turn
@@ -132,22 +131,32 @@ export async function defaultAcpDriver(
   const stop = runStop(opts.maxDurationMs, opts.signal)
   const onStop = (): void => {
     if (!sessionId) return forceStop()
-    void conn.cancel({ sessionId }).catch(() => {})
+    void agent.notify(methods.agent.session.cancel, { sessionId }).catch(() => {})
     forceTimer = setTimeout(forceStop, opts.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS)
   }
   if (stop.signal?.aborted) onStop()
   else stop.signal?.addEventListener("abort", onStop, { once: true })
 
   try {
-    await guarded(conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} }))
-    const session = await guarded(conn.newSession({ cwd: opts.cwd, mcpServers: opts.mcpServers }))
+    await guarded(
+      agent.request(methods.agent.initialize, {
+        protocolVersion: PROTOCOL_VERSION,
+        clientCapabilities: {},
+      }),
+    )
+    const session = await guarded(
+      agent.request(methods.agent.session.new, { cwd: opts.cwd, mcpServers: opts.mcpServers }),
+    )
     sessionId = session.sessionId
     // A stop that landed while the session was being created killed nothing
     // yet (there was no session): honour it now rather than run the turn.
     const early = stop.stoppedBy()
     if (early) return { stopReason: "cancelled", stoppedBy: early }
     const res = await guarded(
-      conn.prompt({ sessionId, prompt: [{ type: "text", text: opts.prompt }] }),
+      agent.request(methods.agent.session.prompt, {
+        sessionId,
+        prompt: [{ type: "text", text: opts.prompt }],
+      }),
     )
     return promptOutcome(res.stopReason, stop.stoppedBy())
   } catch (err) {
@@ -159,10 +168,17 @@ export async function defaultAcpDriver(
       const tail = stderr.length > 4000 ? `…${stderr.slice(-4000)}` : stderr
       opts.log(`${opts.command} stderr:\n${tail}`)
     }
+    if (err instanceof MessageTooLargeError) {
+      throw new Error(
+        `${opts.command}: agent sent an ACP message over the ${err.maxMessageBytes}-byte limit`,
+        { cause: err },
+      )
+    }
     throw err
   } finally {
     if (forceTimer) clearTimeout(forceTimer)
     stop.signal?.removeEventListener("abort", onStop)
+    conn.close()
     if (child.exitCode === null && child.signalCode === null) child.kill()
   }
 }

@@ -832,6 +832,11 @@ The ACP protocol carries MCP servers and a prompt; it does not carry every
 feature of the underlying CLI. Use the spec objects directly with `new
 AcpEngine(spec, capabilityServerScript)` for custom configuration.
 
+The default driver speaks ACP v1 through `@agentclientprotocol/sdk` and keeps
+its default cap on a single incoming message (32 MiB): an agent that writes a
+larger line fails the run with an error naming the agent command and the limit,
+rather than growing host memory without bound.
+
 **`eve` (`eve acp`)** — BYO Anthropic / OpenAI / OpenRouter keys from
 `spec.provider.credentials`; all three have gateway routes. Interactive modes
 and `EVE_*` config are native-only.
