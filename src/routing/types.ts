@@ -28,7 +28,11 @@ export interface CapabilityDefinition {
   model: ModelRef
   /** System prompt for the capability. */
   prompt?: string
-  /** Tool names this capability may use; absent means "no restriction". */
+  /**
+   * Tool names this capability may use. Absent means no restriction; `[]`
+   * means no tools at all. Resolution keeps the two apart (see
+   * {@link ResolvedRoute.tools}).
+   */
   tools?: string[]
   /** Budgets an engine or loop should honour. */
   limits?: RouteLimits
@@ -46,7 +50,13 @@ export interface ResolvedRoute {
   capability: string
   model: ModelRef
   prompt: string
-  tools: string[]
+  /**
+   * The tool names the route allows, as the definition gave them. Absent means
+   * unrestricted; `[]` means no tools at all. Read it with `undefined` in
+   * mind: treating an absent list as empty would turn "no restriction" into
+   * "no tools".
+   */
+  tools?: string[]
   limits: RouteLimits
   meta?: Record<string, unknown>
 }

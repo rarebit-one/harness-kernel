@@ -71,7 +71,9 @@ export class StaticRouteResolver implements RouteResolver {
       capability: definition.name,
       model: definition.model,
       prompt: definition.prompt ?? "",
-      tools: definition.tools ?? [],
+      // Passed through as given: absent (unrestricted) and `[]` (no tools)
+      // mean opposite things and must stay distinguishable.
+      ...(definition.tools ? { tools: definition.tools } : {}),
       limits: definition.limits ?? {},
       ...(definition.meta ? { meta: definition.meta } : {}),
     })
