@@ -314,3 +314,7 @@ export { readEmissions, writeEmissions } from "./engines/capabilityEmissions.js"
 // Secrets
 // ---------------------------------------------------------------------------
 export { secretsToEnv } from "./secrets.js"
+// The masking pair NativeEngine composes, for a caller that runs
+// `connectorTools` with the loop directly and wants the same backstop.
+export { secretMaskSet, maskToolOutput } from "./secrets.js"
+export type { SecretMaskSet } from "./secrets.js"

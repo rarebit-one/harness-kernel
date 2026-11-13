@@ -1,3 +1,5 @@
+import type { Tool, ToolContext } from "./tools/registry.js"
+
 /**
  * Turn the run payload's resolved secrets into an environment map for the
  * code-exec primitive. The caller resolves secret VALUES (from its own secret
@@ -66,4 +68,42 @@ export function secretMaskSet(secrets: Record<string, string> = {}): SecretMaskS
       return out
     },
   }
+}
+
+/**
+ * Wrap each tool so the model-facing string passes through `mask` (usually a
+ * {@link secretMaskSet}'s), on success and on a thrown error alike. The typed `structured` payload is left alone: it
+ * goes to the caller, not the model. A thrown error is replaced only when
+ * masking changed its message, so an abort or timeout error reaches the loop as
+ * itself and is still classified as a stop rather than a failure.
+ */
+export function maskToolOutput(tools: Tool[], mask: (text: string) => string): Tool[] {
+  const masked = async <T>(work: () => Promise<T>, project: (value: T) => T): Promise<T> => {
+    try {
+      return project(await work())
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const safe = mask(message)
+      if (safe === message) throw err
+      // No `cause`: the original error, or its own cause, still carries the secret.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error(safe)
+    }
+  }
+  return tools.map((tool) => {
+    const executeStructured = tool.executeStructured?.bind(tool)
+    return {
+      ...tool,
+      execute: (input, ctx) => masked(() => tool.execute(input, ctx), mask),
+      ...(executeStructured
+        ? {
+            executeStructured: (input: Record<string, unknown>, ctx?: ToolContext) =>
+              masked(
+                () => executeStructured(input, ctx),
+                (out) => ({ ...out, content: mask(out.content) }),
+              ),
+          }
+        : {}),
+    }
+  })
 }

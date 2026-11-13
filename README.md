@@ -67,7 +67,7 @@ Every other engine and the whole native loop work without it. Running the
 | **Engines** | The `AgentEngine` seam + `native`, `claude-code`, `codex`, and ACP (`eve`, `opencode`, `gemini`) harnesses, plus the capability *mechanism* (scope guards, a generic `write_file`, and MCP/stdio transports) — the capability *set* is yours to inject |
 | **Routing** | `RouteResolver` + `StaticRouteResolver` — capability → model, prompt, tools |
 | **Context** | `ContextProvider` chain, assembled in parallel and rendered into the prompt |
-| **Secrets** | `secretsToEnv()` — resolved secret values into an exec environment |
+| **Secrets** | `secretsToEnv()` — resolved secret values into an exec environment; `secretMaskSet()` + `maskToolOutput()` — mask them (and connector credentials) in what tools hand the model |
 
 ## Extension points
 
@@ -659,6 +659,23 @@ out-of-process engines read their server config once, so they refuse such a run
 in `supports()`, and stdio refuses it (its token is set at spawn).
 `ConnectorConfig.clientInfo` (`{ name, version? }`) replaces the default client
 identity announced to the server.
+
+That masking is the native engine's. A caller that runs `connectorTools` with
+`runConversation` or `runAgent` directly composes the same pair the engine
+does: `secretMaskSet` collects values (longest first, their JSON-escaped form
+too, nothing under 6 characters, growing as credentials arrive) and
+`maskToolOutput` passes each tool's result and thrown message through it.
+
+```ts
+const secrets = secretMaskSet(runSecrets) // the values your run_code env carries, if any
+const connectors = await connectorTools(configs, undefined, { onSecret: secrets.add })
+const tools = maskToolOutput([...primitiveTools(workdir, env), ...connectors.tools], secrets.mask)
+try {
+  await runAgent({ provider, system, userPrompt, tools })
+} finally {
+  await connectors.close()
+}
+```
 
 ### Retry and fallback
 
